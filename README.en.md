@@ -362,7 +362,7 @@ AnyKey/
 ├── tests/                 Python config parsing tests
 ├── requirements.txt       Python deps (customtkinter / Pillow / psutil / pywin32)
 ├── anykey_config.json     Runtime config (next to the exe; the single source of truth shared by GUI / Tray / Engine)
-└── LICENSE / SECURITY.md / CHANGELOG.md
+└── LICENSE / SECURITY.md
 ```
 
 **Key boundaries** (cross-module invariants):

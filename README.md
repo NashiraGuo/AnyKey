@@ -359,7 +359,7 @@ AnyKey/
 ├── tests/                 Python 配置解析测试
 ├── requirements.txt       Python 依赖（customtkinter / Pillow / psutil / pywin32）
 ├── anykey_config.json     运行时配置（与 exe 同目录，GUI / Tray / Engine 三端共享的唯一真相）
-└── LICENSE / SECURITY.md / CHANGELOG.md
+└── LICENSE / SECURITY.md
 ```
 
 **关键边界**（跨模组不变量）：
