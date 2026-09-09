@@ -1,6 +1,6 @@
 # AnyKey 代码文件图谱（Code Map）
 
-> 用于开源说明的项目结构索引。AnyKey 是一个「键位重映射 + 运行时控制 + 系统级输入拦截」工具，
+> 给读代码的人用的项目结构索引。AnyKey 是一个「键位重映射 + 运行时控制 + 系统级输入拦截」工具，
 > 分为四大运行模组（GUI / Tray / Engine / Driver）加一层共享库（Lib）与构建/测试外设。
 
 ---
@@ -10,50 +10,58 @@
 ```
 AnyKey/
 ├── gui/                      # 模组 1：配置生成前端（Python + CustomTkinter）
-├── tray/                     # 模组 2：运行控制 / 生命周期（Python + pystray）
+├── anykey-tray/              # 模组 2：运行控制 / 生命周期（Rust）
 ├── lib/                      # 共享层：配置 / IPC / 驱动封装（Python）
 ├── anykey-engine/            # 模组 3：Rust 引擎主功能（后端核心）
-├── anykey-filter-driver/     # 模组 4：内核过滤驱动（系统通讯）
-├── engines/rust/             # 引擎编译产物（exe / pdb）
+├── anykey-filter-driver/     # 模组 4：内核过滤驱动（C，WDK）
+├── engines/rust/             # 引擎编译产物落盘位（构建产物，不入库）
 ├── assets/                   # 图标、帮助文档等资源
-├── build/                    # PyInstaller spec + 构建脚本
+├── build/                    # 构建链：七步总控 + 各组件打包脚本
 ├── scripts/                  # 辅助生成脚本
-├── tests/                    # 单元测试 / 场景测试
-├── docs/                     # 本文档及设计说明
-└── anykey_config.json        # 全局配置根
+├── tests/                    # Python 配置解析测试
+├── docs/                     # 设计说明（DESIGN.md）与架构图 svg
+├── CODEMAP.md                # 本文档
+└── anykey_config.json        # 全局配置根（运行时生成/维护，GUI / Tray / Engine 共享）
 ```
 
 依赖方向（单向，无循环）：
-`GUI → Lib ← Tray`　、`Tray → IPC ⇄ Engine`　、`Engine → FilterDriver → 内核`。
+`GUI → Lib`　、`GUI → IPC ⇄ Tray`　、`Tray → 调度 Engine`　、`Engine → FilterDriver → 内核`。
 
 ---
 
 ## 1. GUI 模组（`gui/`）—— 配置生成器
 
-纯前端，只读/写 `anykey_config.json`，**不含运行时逻辑、不含 AHK 遗留代码**。
+纯前端，只读/写 `anykey_config.json`，**不含运行时逻辑**。
 
 | 文件 | 职责 |
 |------|------|
 | `__init__.py` | 包导出 |
-| `main.py` | CustomTkinter 主窗口、页面路由、事件循环；`_current_app` 状态 + 应用感知回调；调用 `lib.config` 读写配置；`_collect_combo_rows` 自动剥离 combo key1/key2 中的 `{}` 花括号 |
+| `main.py` | CustomTkinter 主窗口、页签调度、事件循环；`_current_app` 状态 + 应用感知回调；调用 `lib.config` 读写配置；`_collect_combo_rows` 自动剥离 combo key1/key2 中的 `{}` 花括号 |
 | `app_bar.py` | 应用感知顶栏独立组件：下拉（全局/已配置/运行中进程）+ 刷新/浏览/删除/导出/导入按钮；`psutil`+`win32gui` 枚举前台进程 |
 | `components.py` | 可复用 UI 组件（按钮、卡片、表单绑定） |
 | `layout.py` | 各配置区的布局定义（Combo / Layer / TapDance / Device 编辑器） |
-| `dialogs.py` | 弹窗：设备选择、键名拾取、确认删除 |
+| `dialogs.py` | 弹窗：设备选择、键名拾取、大编辑窗口（LargeInputDialog）、确认删除 |
 | `scanner.py` | 枚举已接入设备 / 读取当前配置快照供编辑 |
 
-> 与 Tray 的边界：GUI 发命令通过 `lib.ipc.IpcClient` 给 Tray，但**绝不自己起引擎**。
+> 与 Tray 的边界：GUI 通过 `lib.ipc.IpcClient`（TCP 127.0.0.1:19527）向 Tray 发命令，但**绝不自己起引擎**。
 
 ---
 
-## 2. Tray 模组（`tray/`）—— 运行控制器
+## 2. Tray 模组（`anykey-tray/`）—— 运行控制器
 
-独立进程，管理引擎生命周期；是 `lib.ipc.IpcServer` 的服务端。
+独立 Rust 进程（`anykey-tray.exe`），管理引擎生命周期，是 IPC 服务端。
 
 | 文件 | 职责 |
 |------|------|
-| `__init__.py` | 包导出 |
-| `main.py` | 托盘图标、单实例互斥体、菜单（打开主窗口 / 暂停恢复 / 重载 / 开机自启 / 调试模式 / 退出）；通过 `lib.ipc.IpcServer` 接收 GUI 命令并调度 `anykey-engine.exe` |
+| `Cargo.toml` / `Cargo.lock` | Rust 依赖与锁版本 |
+| `src/main.rs` | 入口：单实例启动托盘 + IPC 服务线程，调度引擎进程 |
+| `src/app.rs` | `Shared` 共享状态（运行/暂停/调试标志、引擎进程句柄） |
+| `src/tray.rs` | 托盘菜单：打开主窗口 / 暂停·恢复 / 重载设置 / 开机自启 / 调试模式 / 退出；图标区分运行/暂停两态 |
+| `src/engine.rs` | 引擎进程生命周期（启动 / 停止） |
+| `src/ipc.rs` | IPC 服务端：TCP 127.0.0.1:19527，JSON 行协议（与 `lib/ipc.py` 完全兼容）；单连接模式，非阻塞 accept + 轮询 |
+| `src/icon.rs` | 内嵌托盘图标资源 |
+| `src/paths.rs` | exe 路径解析（配置文件 / 引擎 exe / GUI exe 定位） |
+| `src/registry.rs` | 开机自启（注册表 Run 项读写） |
 
 > 与 GUI 的边界：Tray **不编辑配置**，只接收 GUI 通过 IPC 发来的 `pause/resume/reload/status/quit` 并作用在引擎进程上。
 
@@ -65,10 +73,10 @@ AnyKey/
 |------|------|
 | `__init__.py` | 包导出 |
 | `config.py` | 配置加载/保存/校验；键名规范化（缩写→全名）；`_KEY_ALIAS_TO_FULL` 含旧鼠标键名→新规范名迁移（`lbutton→mouseleft` 等）；`_KEY_NORM_FALLBACK` 鼠标条目为自身映射；`normalize_layers_key_outputs` 是唯一规范化源头 |
-| `ipc.py` | `IpcServer`（Tray 侧）/ `IpcClient`（GUI 侧）；TCP localhost + JSON 行协议（端口 19527） |
+| `ipc.py` | `IpcClient`（GUI 侧，连接 Tray）；Python 版 `IpcServer` 保留供测试（`build/test_tray_ipc.py`）；协议：TCP localhost:19527 + JSON 行协议，服务端实现在 `anykey-tray/src/ipc.rs` |
 | `driver.py` | 用户态驱动调用封装：打开/查询/注入；与 `anykey-engine/src/filter_driver.rs` 共享 `public.h` 的 IOCTL 契约 |
 
-> 关键铁律：`config.py` 的键名表与 `anykey-engine/src/util.rs` 的 `wrap_single_key_output` 必须逐字节对齐（见 working-memory「驱动接口三方结构体同步」）。
+> 关键铁律：`config.py` 的键名表与 `anykey-engine/src/util.rs` 的 `wrap_single_key_output` 必须逐字节对齐。
 
 ---
 
@@ -99,14 +107,13 @@ AnyKey/
 | `app_sensor.rs` | SetWinEventHook 窗口类名侦测 + mpsc channel |
 | `util.rs` | `wrap_single_key_output`、扫描码表、`is_layer_key`、`needs_e0` 等工具 |
 | `filter_driver.rs` | `#[cfg(feature="filter-driver")]`：与内核驱动通讯（WAIT_INPUT / SET_INTERCEPT / 鼠标注入） |
-| `src/backups_*/` | 各次调试/回归的 `.bak` 备份（不纳入主流程） |
 
-管道拆分结构（`pipeline.rs` 主干 + `pipeline/` 五系统子模块，phase wrapper 留在主干做 flag/debug 转发，核心逻辑在各自模块）：
+管道拆分结构（`pipeline.rs` 主干 + `pipeline/` 五系统子模块，phase wrapper 留在主干做 flag/debug 转发，核心逻辑在各自模块；行数为约数）：
 
 ```
-pipeline.rs            主干调度 + Phase0-7/Up1-8+UpLeader wrappers + 共享查询层（~720 行）
-├── combo.rs           Combo 匹配/状态机/打断/超时/清理（~280 行）
-├── commit.rs          resolver/output/commit_stage + send_key/release_key + emit_* 通道（~760 行）
+pipeline.rs            主干调度 + Phase0-7/Up1-8+UpLeader wrappers + 共享查询层（~630 行）
+├── combo.rs           Combo 匹配/状态机/打断/超时/清理（~300 行）
+├── commit.rs          resolver/output/commit_stage + send_key/release_key + emit_* 通道（~790 行）
 ├── tap_dance.rs       TD 状态机 + hold/dt/dh 计时器 + interrupt（~410 行）
 ├── defer.rs           延迟决策 + force-hold + waiting_stack（~160 行）
 └── leader.rs          Leader 拦截/匹配/执行/级联（~280 行）
@@ -117,35 +124,33 @@ pipeline.rs            主干调度 + Phase0-7/Up1-8+UpLeader wrappers + 共享�
 | 文件/目录 | 职责 |
 |-----------|------|
 | `Cargo.toml` / `Cargo.lock` | Rust 依赖与锁版本 |
-| `combo_config.json` | 示例/测试配置 |
 | `examples/` | 配置样例 |
-| `tests/` | `cargo test` 集成测试：`scenario_test.rs`（golden 比对）、`pipeline_test.rs`（39 单元）、`runtime_builder_test.rs`（9 单元，从 src 分离）、`app_aware_test.rs`、`doubletap_hold_test.rs`、`hotplug_test.rs`、`leak_test.rs`、`reachability_test.rs` |
-| `target/` | 编译产物（debug/release） |
+| `tests/` | `cargo test` 集成测试（合计全仓 109 项测试）：`scenario_test.rs`（golden 比对）+ `scenarios/` 场景集、`pipeline_test.rs`、`runtime_builder_test.rs`、`app_aware_test.rs`、`doubletap_hold_test.rs`、`hotplug_test.rs`、`leak_test.rs`、`reachability_test.rs`、`device_routing_test.rs`、`toggle_layer_test.rs`、`combo_mouse_correct_flow.rs`、`combo_mouse_merged_packet.rs`、`mouse_translator.rs`、`probe/` 探针数据 |
+| `target/` | 编译产物（debug/release，不入库） |
 
 ---
 
 ## 5. Filter Driver 模组（`anykey-filter-driver/`）—— 系统通讯
 
-内核级 UpperFilter，替代 Interception（无 10 键硬限制、支持热插拔/休眠）。
+内核级 UpperFilter（kbdclass / mouclass 下方），替代 Interception（无 10 键硬限制、支持热插拔/休眠）。
 
 ### 5.1 驱动源码（`sys/`）
 
 | 文件 | 职责 |
 |------|------|
-| `public.h` | IOCTL 与 `ANYKEY_*` 结构体**唯一真值定义**（与 `filter_driver.rs` / `driver.py` 三方对齐） |
+| `public.h` | IOCTL 与 `ANYKEY_*` 结构体**唯一真值定义**（与 `filter_driver.rs` / `lib/driver.py` 三方对齐） |
 | `anykey_flt.h` | 驱动内部头（设备扩展、回调原型） |
-| `anykey_flt.c` | 过滤主逻辑：`KbFilter_ServiceCallback` / `MouFilter_ServiceCallback`；拦截态入队、透传捕获 |
+| `anykey_flt.c` | 过滤主逻辑：`KbFilter_ServiceCallback` / `MouFilter_ServiceCallback`；拦截态入队、透传捕获；含内核级紧急脱离快捷键（LCtrl+Space+Esc） |
 | `rawpdo.c` | 原始 PDO 创建（设备枚举、即插即用） |
 | `hello_flt.c` | Microsoft kbfiltr 样例基线 |
-| `backups/` | 驱动源码的 `.bak` 备份 |
 
 ### 5.2 用户态与装载
 
 | 文件/目录 | 职责 |
 |-----------|------|
-| `build_driver.bat` / `build_driver.ps1` | WDK 编译 + 签名 + INF 安装 |
-| `bin/`, `Release/`, `deploy/` | 编译产物与部署包 |
-| `build.log` | 构建日志 |
+| `build_driver.bat` / `build_driver.ps1` | WDK 编译 + 测试签名 |
+| `deploy/` | 发行目录：`Install_AnyKey_Filter.bat`（一键安装）/ `Uninstall_AnyKey_Filter.bat` + `_install_anykey_device.ps1` / `_uninstall.ps1`（实际安装逻辑）+ `anykey_flt.inf`（Keyboard）/ `anykey_flt_mouse.inf`（Mouse）+ `anykey_flt.sys` + `anykey_flt.cer` |
+| `bin/`, `Release/`, `build.log` | 本地编译产物与日志（不入库） |
 
 > INF 分两份：`anykey_flt.inf`（Keyboard class）+ `anykey_flt_mouse.inf`（Mouse class），同一 `.sys` 多引用。
 
@@ -156,25 +161,29 @@ pipeline.rs            主干调度 + Phase0-7/Up1-8+UpLeader wrappers + 共享�
 | 路径 | 职责 |
 |------|------|
 | `assets/help.md`, `icon.ico`, `icon.png` | 帮助文档 + 托盘/窗口图标 |
-| `build/anykey.spec` | PyInstaller 打包规范（GUI+Tray → exe） |
-| `build/build.bat` | 一键打包 Python 侧 |
-| `build/build_engine_release.bat` / `.py` | Rust 引擎 release 构建 |
-| `engines/rust/` | 引擎 exe 落盘位置（Tray 启动目标） |
+| `build/build.bat` | 一键七步总控：驱动→引擎→GUI→托盘→组装→签名→release |
+| `build/anykey.spec` | PyInstaller 打包规范（GUI → exe） |
+| `build/build_driver_release.py` | 驱动构建包装（编译+签名+原子部署到 `deploy/`） |
+| `build/build_engine_release.py` / `build_engine_release.bat` | Rust 引擎 release 构建 |
+| `build/build_tray_release.py` | Rust 托盘 release 构建 |
+| `build/build_release_package.py` | 发行包组装（`release\` 标准目录）+ `--zip <版本>` 压缩 |
+| `build/test_tray_ipc.py` | Tray IPC 协议测试工具 |
+| `engines/rust/` | 引擎 exe 落盘位置（Tray 启动目标，构建产物不入库） |
 | `scripts/_gen_stacking_scenarios.py` | 生成 Leader/TapDance 堆叠测试场景 |
-| `tests/__init__.py`, `scenarios/`, `test_config.py` | Python 侧测试入口 |
+| `tests/` | Python 配置解析测试（`test_config.py` 等） |
 
 ---
 
 ## 7. 进程与数据流（运行期）
 
 ```
-[GUI.exe] ──IPC(cmd)──▶ [Tray.exe] ──启动/调度──▶ [anykey-engine.exe]
-   (lib.ipc            (lib.ipc            (Rust, 读 anykey_config.json)
-    .IpcClient)         .IpcServer)                │
-                                                    ▼
-                                          [Filter Driver .sys]
-                                           ↕ 内核输入队列
-                                          (键盘/鼠标设备)
+[anykey-gui.exe] ──IPC(cmd)──▶ [anykey-tray.exe] ──启动/调度──▶ [anykey-engine.exe]
+   (lib.ipc                  (anykey-tray/src/              (Rust, 读 anykey_config.json)
+    .IpcClient)               ipc.rs 服务端)                       │
+                                                                    ▼
+                                                          [Filter Driver .sys]
+                                                           ↕ 内核输入队列
+                                                          (键盘/鼠标设备)
 ```
 
 - GUI 只写配置 + 透过 IPC 发命令，永不自己处理按键。
@@ -185,12 +194,13 @@ pipeline.rs            主干调度 + Phase0-7/Up1-8+UpLeader wrappers + 共享�
 
 ## 8. 关键不变量（跨模组）
 
-1. **配置根**：`anykey_config.json` 是 GUI/Tray/Engine 三端共享的唯一真相。
+1. **配置根**：`anykey_config.json` 是 GUI/Tray/Engine 三端共享的唯一真相（与 exe 同目录）。
 2. **键名规范化**只发生在 GUI（`lib/config.py`）；引擎仅作防御层。
-3. **IOCTL/结构体三方对齐**：`public.h`（C）↔ `filter_driver.rs`（Rust）↔ `driver.py`（Python），任何一侧改 IOCTL 功能号必须同步三处。
-4. **进程边界**：GUI 与 Tray 是两个独立 Python 进程，经 `\\.\pipe\AnyKeyControl` 的 TCP(JSON) 通信；Engine 是独立 Rust 进程，经 Filter Driver 与内核通讯。
+3. **IOCTL/结构体三方对齐**：`public.h`（C）↔ `filter_driver.rs`（Rust）↔ `lib/driver.py`（Python），任何一侧改 IOCTL 功能号必须同步三处。
+4. **进程边界**：GUI（Python）与 Tray（Rust）是两个独立进程，经 TCP localhost:19527（JSON 行协议）通信；Engine 是独立 Rust 进程，经 Filter Driver 与内核通讯。
 
 ---
+
 ## 9. 设备+应用感知运行时架构（v3）
 
 ### 9.1 核心概念
@@ -263,5 +273,3 @@ Layer 3: config.devices[guid].apps[app]          ← 设备+app 专属
 使用 `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` 监听前台窗口切换，
 通过 `QueryFullProcessImageNameW` 获取进程名（如 `chrome.exe`），
 经 mpsc channel 异步发送给主循环。主循环仅在进程名变化时触发 mapping 切换。
-
----

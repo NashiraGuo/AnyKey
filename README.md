@@ -333,7 +333,7 @@ AnyKey/
 │   └── config.py          配置模型与键名归一化（唯一规范化入口）
 ├── anykey-engine/         Rust 引擎（后端核心）
 │   ├── src/               管道调度 Phase0-7 / Up1-8，Combo/TD/Layer/Leader/Defer
-│   └── tests/             集成测试（单元 + 场景测试共 73 项）
+│   └── tests/             集成测试（单元 + 场景测试共 109 项）
 ├── anykey-tray/           Rust 系统托盘（引擎生命周期 / IPC / 开机自启）
 ├── anykey-filter-driver/  C 内核过滤驱动（WDK）
 │   ├── sys/               驱动源码（anykey_flt.c / rawpdo.c / public.h）
@@ -408,7 +408,7 @@ python -m gui.main             # 启动配置器
 
 ## 8. 测试
 
-- Rust 引擎：`cargo test`（单元测试 + 场景测试共 73 项，含集成测试 `tests/` 目录）
+- Rust 引擎：`cargo test`（单元测试 + 场景测试共 109 项，含集成测试 `tests/` 目录）
 - Python：`tests/` 下配置解析测试
 
 ---
@@ -426,7 +426,7 @@ python -m gui.main             # 启动配置器
 ## 10. 文档
 
 - 设计思路：[`docs/DESIGN.md`](docs/DESIGN.md) —— 各核心功能的设计动机与关键决策
-- 代码地图：[`docs/code_map.md`](docs/code_map.md) + [`docs/code_map_arch.svg`](docs/code_map_arch.svg) —— 模块划分与数据流
+- 代码地图：根目录 [`CODEMAP.md`](CODEMAP.md) + [`docs/code_map_arch.svg`](docs/code_map_arch.svg) —— 模块划分与数据流（给读代码的人用的结构索引）
 
 ---
 

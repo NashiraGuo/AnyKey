@@ -335,7 +335,7 @@ AnyKey/
 │   └── config.py          Config model & key-name normalization (single source of normalization)
 ├── anykey-engine/         Rust engine (backend core)
 │   ├── src/               Pipeline phases 0-7 / Up1-8, Combo/TD/Layer/Leader/Defer
-│   └── tests/             Integration tests (73 unit + scenario tests)
+│   └── tests/             Integration tests (109 unit + scenario tests)
 ├── anykey-tray/           Rust system tray (engine lifecycle / IPC / autostart)
 ├── anykey-filter-driver/  C kernel filter driver (WDK)
 │   ├── sys/               Driver source (anykey_flt.c / rawpdo.c / public.h)
@@ -347,7 +347,8 @@ AnyKey/
 │   ├── build_driver_release.py / build_engine_release.py / build_tray_release.py
 │   ├── build_release_package.py   Release package assembly + zip
 │   └── anykey.spec        PyInstaller config
-├── docs/                  Design docs (DESIGN.md / code_map.md / architecture svg)
+├── docs/                  Design docs (DESIGN.md / architecture svg)
+├── CODEMAP.md             Code map: structure index for code readers
 ├── engines/rust/          Engine exe deployment location (build artifact, loaded by GUI)
 ├── scripts/               Helper scripts (test scenario generation etc.)
 ├── tests/                 Python config parsing tests
@@ -428,7 +429,7 @@ python -m gui.main             # launch the configurator
 ## 10. Documentation
 
 - Design rationale: [`docs/DESIGN.md`](docs/DESIGN.md) — motivation and key decisions behind each core feature
-- Code map: [`docs/code_map.md`](docs/code_map.md) + [`docs/code_map_arch.svg`](docs/code_map_arch.svg) — module breakdown and data flow
+- Code map: root-level [`CODEMAP.md`](CODEMAP.md) + [`docs/code_map_arch.svg`](docs/code_map_arch.svg) — module breakdown and data flow (a structure index for code readers)
 
 ---
 
