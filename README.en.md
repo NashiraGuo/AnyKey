@@ -4,7 +4,15 @@
 
 > A high-performance key remapping tool for Windows — combos, tap-dance, layers, leader sequences, deferred decisions, and kernel-level input interception.
 
-AnyKey is a **keyboard & mouse remapping + runtime control + system-level input interception** tool. It hands you full control over how your keyboard and mouse respond. The core engine is written in **Rust** and, through a **custom Windows kernel filter driver (UpperFilter)**, intercepts and re-injects keyboard/mouse input at the system level — with none of the 10-key hard limit of interception-based solutions, and with hot-plug and sleep/wake support. All key processing happens locally: **no telemetry, no network reporting**.
+AnyKey is a **keyboard & mouse remapping + runtime control + system-level input interception** tool. It hands you full control over how your keyboard and mouse respond. The core engine is written in **Rust** and, through a **custom Windows kernel filter driver (UpperFilter)**, intercepts and re-injects keyboard/mouse input at the system level. All key processing happens locally: **no telemetry, no network reporting**.
+
+### Why a custom kernel driver? — fixing Interception's device limit
+
+The popular Interception driver has an architectural flaw: **the whole system supports at most 10 input devices**. Plug in a second keyboard, an external macro pad, or add a few virtual devices, and device #11 simply stops working. AnyKey's own UpperFilter driver **removes this limit entirely** — connect as many keyboards and mice as you like, and hot-plug and sleep/wake compatibility come along for free.
+
+### An honest note about Test Mode
+
+Loading a driver in normal mode requires Microsoft-recognized signing (an EV code-signing certificate plus WHQL certification). **Those costs are currently beyond what I can afford as an independent developer** (certificate annual fees plus certification testing add up), so this version can only run in **Windows Test Signing mode**, with a permanent "Test Mode" watermark at the bottom-right of the desktop. This is a **funding issue, not a technical compromise** — once the project can carry the cost, proper signing will follow and this limitation will be removed (see the roadmap). Please read the [full security & limitations notes](#2-installation) before installing.
 
 Compared with other remapping tools, AnyKey has two fundamental advantages rooted in its low-level architecture:
 
@@ -22,7 +30,7 @@ Compared with other remapping tools, AnyKey has two fundamental advantages roote
 - **Defer**: keystrokes downstream of a layer key are delayed until hold/tap is decided, then replayed automatically (chained dependencies)
 - **Macros**: `RUN:` (launch programs/URLs/files), `{Sleep N}` (non-blocking delay), `{Select N}`, `{KeyName N}` (repeat a key), `MouseMove(x, y)`
 - **Full mouse coverage**: 5 buttons into the pipeline (TD / Combo / layer switching); wheel and movement pass through
-- **Kernel driver**: UpperFilter input interception — no 10-key hard limit, hot-plug & sleep friendly
+- **Kernel driver**: UpperFilter input interception — no device-count limit, hot-plug & sleep friendly
 - **Device + application aware runtime**: different mappings per device/app; input state shared across devices by domain
 - **Device whitelist**: filter by VID/PID; non-whitelisted devices pass through completely untouched
 - **GUI configurator**: CustomTkinter graphical interface, WYSIWYG editing of the config
@@ -32,7 +40,7 @@ Compared with other remapping tools, AnyKey has two fundamental advantages roote
 
 ## 2. Installation
 
-> ⚠️ **Important limitations — read before installing**: AnyKey's kernel driver **does not carry a Microsoft signing certificate** (driver signing is expensive; WHQL certification has not been pursued yet), so it **can only load in Windows Test Signing mode**, and **Test Signing is mutually exclusive with Secure Boot — you must disable Secure Boot in UEFI first**. Once test mode is on, a "Test Mode" watermark stays on the bottom-right of the desktop; some virtualization-based security features (HVCI / Memory Integrity) will block unsigned driver loading — verify your machine's security configuration is compatible before enabling. Proceed only after understanding and accepting these risks.
+> ⚠️ **Important limitations — read before installing**: AnyKey's kernel driver **does not carry a Microsoft signing certificate** (Microsoft signing costs are beyond an independent developer's current means — see the note at the top), so it **can only load in Windows Test Signing mode**, and **Test Signing is mutually exclusive with Secure Boot — you must disable Secure Boot in UEFI first**. Once test mode is on, a "Test Mode" watermark stays on the bottom-right of the desktop; some virtualization-based security features (HVCI / Memory Integrity) will block unsigned driver loading — verify your machine's security configuration is compatible before enabling. Proceed only after understanding and accepting these risks.
 
 Get AnyKey one of two ways: download the release package (zip) from GitHub Releases and extract it anywhere, or clone the repository and build from source. **Except for the kernel driver, all components (GUI configurator, system tray, engine) are standalone executables — no installation needed.**
 

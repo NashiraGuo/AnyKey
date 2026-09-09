@@ -132,7 +132,7 @@ pipeline.rs            主干调度 + Phase0-7/Up1-8+UpLeader wrappers + 共享�
 
 ## 5. Filter Driver 模组（`anykey-filter-driver/`）—— 系统通讯
 
-内核级 UpperFilter（kbdclass / mouclass 下方），替代 Interception（无 10 键硬限制、支持热插拔/休眠）。
+内核级 UpperFilter（kbdclass / mouclass 下方），替代 Interception（无设备数量上限、支持热插拔/休眠）。
 
 ### 5.1 驱动源码（`sys/`）
 
