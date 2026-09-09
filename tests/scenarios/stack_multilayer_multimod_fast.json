@@ -1,0 +1,175 @@
+{
+  "name": "stack_multilayer_multimod_fast",
+  "ahi_incompatible": true,
+  "desc": "f1=fn1,f2=fn2,q=ctrl,w=alt,k普通(fn2.k->{y}); 全按下后 k↓k↑ 先到, 再释放mods/layers",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "f1": {
+          "tap": "{f1}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "f2": {
+          "tap": "{f2}",
+          "hold": "{fn2}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "q": {
+          "tap": "{q}",
+          "hold": "{ctrl}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "w": {
+          "tap": "{w}",
+          "hold": "{alt}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "k": {
+          "tap": "{k}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "f2": {
+          "tap": "{f2}",
+          "hold": "{fn2}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn2": {
+        "k": {
+          "tap": "{y}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "q": {
+          "tap": "{q}",
+          "hold": "{ctrl}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "w": {
+          "tap": "{w}",
+          "hold": "{alt}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "f1"
+    },
+    {
+      "wait": 250
+    },
+    {
+      "dn": "f2"
+    },
+    {
+      "wait": 250
+    },
+    {
+      "dn": "q"
+    },
+    {
+      "wait": 250
+    },
+    {
+      "dn": "w"
+    },
+    {
+      "wait": 250
+    },
+    {
+      "dn": "k"
+    },
+    {
+      "up": "k"
+    },
+    {
+      "up": "w"
+    },
+    {
+      "up": "q"
+    },
+    {
+      "up": "f2"
+    },
+    {
+      "up": "f1"
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "LayerOn": "fn2"
+    },
+    {
+      "Down": "ctrl"
+    },
+    {
+      "Down": "alt"
+    },
+    {
+      "Down": "y"
+    },
+    {
+      "Up": "y"
+    },
+    {
+      "Up": "alt"
+    },
+    {
+      "Up": "ctrl"
+    },
+    {
+      "LayerOff": "fn2"
+    },
+    {
+      "LayerOff": "fn1"
+    }
+  ]
+}

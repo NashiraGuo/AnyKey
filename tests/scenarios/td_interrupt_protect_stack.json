@@ -1,0 +1,163 @@
+{
+  "name": "td_interrupt_protect_stack",
+  "desc": "a/b 链式层键(c=shift 在 fn2)，x 有 TD 未被 defer，y 无设置打断 x 触发 td_interrupt_all：应保护 a/b/c 仍留 waiting_stack，x 输出时激活 a/b/c 的 hold(层+shift) 后输出 n，再输出 y，keyup 正确反激活",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "q",
+        "key2": "w",
+        "output": "{Esc}",
+        "layer": "base"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "{F1}",
+          "dtt": "250",
+          "dh": "{F2}",
+          "dht": "200"
+        },
+        "b": {
+          "tap": "{b}",
+          "hold": "{fn2}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "c": {
+          "tap": "{c}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "{X}",
+          "dtt": "250",
+          "dh": "{X2}",
+          "dht": "200"
+        },
+        "y": {
+          "tap": "{y}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "b": {
+          "tap": "",
+          "hold": "{fn2}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn2": {
+        "c": {
+          "tap": "",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{n}",
+          "hold": "",
+          "ht": "",
+          "dt": "{N}",
+          "dtt": "250",
+          "dh": "{N2}",
+          "dht": "200"
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "dn": "b"
+    },
+    {
+      "dn": "c"
+    },
+    {
+      "dn": "x"
+    },
+    {
+      "dn": "y"
+    },
+    {
+      "up": "a"
+    },
+    {
+      "up": "b"
+    },
+    {
+      "up": "c"
+    },
+    {
+      "up": "x"
+    },
+    {
+      "up": "y"
+    },
+    {
+      "wait": 500
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "LayerOn": "fn2"
+    },
+    {
+      "Down": "shift"
+    },
+    {
+      "Down": "n"
+    },
+    {
+      "Down": "y"
+    },
+    {
+      "LayerOff": "fn1"
+    },
+    {
+      "LayerOff": "fn2"
+    },
+    {
+      "Up": "shift"
+    },
+    {
+      "Up": "n"
+    },
+    {
+      "Up": "y"
+    }
+  ]
+}

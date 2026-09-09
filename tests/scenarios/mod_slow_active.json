@@ -1,0 +1,72 @@
+{
+  "name": "mod_slow_active",
+  "ahi_incompatible": true,
+  "desc": "z hold=shift; z↓ (300, shift已激活) 6↓ 6↑ z↑ — 打断键在shift激活后直接生效",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "z": {
+          "tap": "{z}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "6": {
+          "tap": "{6}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "z"
+    },
+    {
+      "wait": 300
+    },
+    {
+      "dn": "6"
+    },
+    {
+      "up": "6"
+    },
+    {
+      "up": "z"
+    }
+  ],
+  "expect": [
+    {
+      "Down": "shift"
+    },
+    {
+      "Down": "6"
+    },
+    {
+      "Up": "6"
+    },
+    {
+      "Up": "shift"
+    }
+  ]
+}

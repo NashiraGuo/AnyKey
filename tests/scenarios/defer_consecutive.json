@@ -1,0 +1,112 @@
+{
+  "name": "defer_consecutive",
+  "desc": "D1 连续 defer（一次仅一个被 defer）：switch 键 a(hold=fn1) 在 waiting_stack 中，连续按下两个普通键 x、y。第二个键 y 的 keydown 应先将已 defer 的 x flush 出去（发送 x），再把 y 自身 defer。验证 phase_defer step1 的『打断 defer / 一次仅一个』不变量。",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "y": {
+          "tap": "{y}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "y": {
+          "tap": "{y}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "dn": "x"
+    },
+    {
+      "dn": "y"
+    },
+    {
+      "up": "a"
+    },
+    {
+      "up": "x"
+    },
+    {
+      "up": "y"
+    },
+    {
+      "wait": 300
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "Down": "x"
+    },
+    {
+      "Down": "y"
+    },
+    {
+      "LayerOff": "fn1"
+    },
+    {
+      "Up": "x"
+    },
+    {
+      "Up": "y"
+    }
+  ]
+}

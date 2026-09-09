@@ -1,0 +1,112 @@
+{
+  "name": "td_k4_interrupt_forcehold",
+  "desc": "K4 回归：a=switch(hold fn1)，k=非switch TD键(dt only→Waiting)，x 在 k 处于 Waiting 时按下打断 k。验证 keydown 侧 td_interrupt_all(force_hold_before=true) 在 try_defer_layer_interrupt 之前执行，使 k 在被打断时 fn1 已激活、按 fn1 解析出 {q} 而非 base 的 {b}。源自备份 _probe_k4.json（其 expect 为空、未固化为回归测试）。",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "k": {
+          "tap": "{b}",
+          "hold": "",
+          "ht": "200",
+          "dt": "{F4}",
+          "dtt": "250",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "k": {
+          "tap": "{q}",
+          "hold": "",
+          "ht": "200",
+          "dt": "{F4}",
+          "dtt": "250",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "dn": "k"
+    },
+    {
+      "dn": "x"
+    },
+    {
+      "up": "x"
+    },
+    {
+      "up": "k"
+    },
+    {
+      "up": "a"
+    },
+    {
+      "wait": 300
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "Down": "q"
+    },
+    {
+      "Down": "x"
+    },
+    {
+      "Up": "x"
+    },
+    {
+      "Up": "q"
+    },
+    {
+      "LayerOff": "fn1"
+    }
+  ]
+}

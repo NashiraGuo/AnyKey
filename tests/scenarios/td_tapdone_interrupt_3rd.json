@@ -1,0 +1,52 @@
+{
+  "name": "td_tapdone_interrupt_3rd",
+  "desc": "双按键在 TapDone 状态被第三键打断(td_interrupt_all)时必须补发 UP。回归：bug 曾只发 Down a 漏 Up a，导致 a 卡按下（见 td_interrupt_all 的 TapDone 分支 reenter_up 修复）。",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "1": {
+          "tap": "a",
+          "dt": "{a}{a}",
+          "dtt": "250"
+        },
+        "3": {
+          "tap": "3"
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "1"
+    },
+    {
+      "up": "1"
+    },
+    {
+      "dn": "3"
+    },
+    {
+      "up": "3"
+    },
+    {
+      "wait": 400
+    }
+  ],
+  "expect": [
+    {
+      "Down": "a"
+    },
+    {
+      "Up": "a"
+    },
+    {
+      "Down": "3"
+    },
+    {
+      "Up": "3"
+    }
+  ]
+}

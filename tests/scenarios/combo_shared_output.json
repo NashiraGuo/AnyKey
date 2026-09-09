@@ -1,0 +1,124 @@
+{
+  "name": "combo_shared_output",
+  "ahi_incompatible": true,
+  "desc": "两个 hold-combo 共享输出 a+b->{1} 与 c+d->{1}；按下应2个Down(1)，抬起应2个Up(1)（对称）",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "a",
+        "key2": "b",
+        "output": "{1}",
+        "layer": "base"
+      },
+      {
+        "key1": "c",
+        "key2": "d",
+        "output": "{1}",
+        "layer": "base"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "b": {
+          "tap": "",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "c": {
+          "tap": "",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "d": {
+          "tap": "",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "dn": "b"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "dn": "c"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "dn": "d"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "up": "a"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "up": "b"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "up": "c"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "up": "d"
+    }
+  ],
+  "expect": [
+    {
+      "Down": "1"
+    },
+    {
+      "Down": "1"
+    },
+    {
+      "Up": "1"
+    },
+    {
+      "Up": "1"
+    }
+  ]
+}

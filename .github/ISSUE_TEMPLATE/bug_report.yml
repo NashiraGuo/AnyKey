@@ -1,0 +1,51 @@
+name: Bug Report
+description: 报告一个 bug
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量提供完整信息，方便快速定位。
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 引擎版本 / 提交号（`git log -1` 或 Release 版本号）
+      placeholder: "v0.9.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 系统
+      options:
+        - Windows 10 x64
+        - Windows 11 x64
+        - 其他（请说明）
+    validations:
+      required: true
+  - type: textarea
+    id: describe
+    attributes:
+      label: 问题描述
+      description: 发生了什么？预期是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 最小复现的按键序列 + 相关配置片段
+      placeholder: |
+        1. 配置 comboMap 为 { "key1": "q", "key2": "w", "output": "{enter}" }
+        2. 同时按下 q + w
+        3. 观察到 ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 若开启 `--debug`，附上 anykey_engine.log 相关片段
+      render: text

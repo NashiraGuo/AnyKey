@@ -1,0 +1,77 @@
+{
+  "name": "td_dh_switchkey",
+  "desc": "C5.1: doublehold=层键的键作为 doubleSwitch 键在 DoubleWait 时入栈。结构（仿 td_dt_via_waiting_stack）：a(hold={fn1}) 先按住入栈(Hold)，b 定义在 fn1 且其 doublehold={fn2}（这样 b 不被 defer、能进 TD 状态机）。步骤：dn a → dn b(up→TapDone) → dn b(第二次确认 DoubleWait，doublehold={fn2} 触发入栈 DoubleHold) → dn c(hold={fn3}) → up c 触发 before-self force-hold：激活其前 b → b 按 DoubleHold 标签发 doublehold 点亮 fn2，a 此前已被点亮 fn1。预期 LayerOn fn1/fn2 均出现且干净反激活；若 C5.1 未实现，b 不入栈 → 缺 LayerOn/LayerOff fn2。",
+  "debug_log": "td_dh_switchkey",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200"
+        }
+      },
+      "fn1": {
+        "b": {
+          "tap": "{b}",
+          "dh": "{fn2}",
+          "ht": "200"
+        },
+        "c": {
+          "tap": "{c}",
+          "hold": "{fn3}",
+          "ht": "200"
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "dn": "b"
+    },
+    {
+      "up": "b"
+    },
+    {
+      "dn": "b"
+    },
+    {
+      "dn": "c"
+    },
+    {
+      "up": "c"
+    },
+    {
+      "up": "b"
+    },
+    {
+      "up": "a"
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "LayerOn": "fn2"
+    },
+    {
+      "Down": "c"
+    },
+    {
+      "Up": "c"
+    },
+    {
+      "LayerOff": "fn2"
+    },
+    {
+      "LayerOff": "fn1"
+    }
+  ]
+}

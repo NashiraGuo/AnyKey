@@ -1,0 +1,63 @@
+# ── Rust ──
+anykey-engine/target*/
+anykey-tray/target*/
+**/*.rs.bk
+anykey-engine/stderr.txt
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+venv/
+venv_old_broken/
+.venv/
+*.egg-info/
+
+# ── 构建产物 ──
+engines/rust/
+build/dist/
+build/build/
+*.exe
+*.pdb
+*.dll
+
+# ── 备份（绝不入库）──
+backups/
+**/backups/
+
+# ── 日志 ──
+*.log
+anykey_engine.log
+
+# ── 内核驱动构建产物 ──
+anykey-filter-driver/Release/
+anykey-filter-driver/bin/
+anykey-filter-driver/*.i
+# deploy/ 里的 .sys/.inf/.cer 是构建产物，安装脚本是源码必须入库
+anykey-filter-driver/deploy/*
+!anykey-filter-driver/deploy/Install_AnyKey_Filter.bat
+!anykey-filter-driver/deploy/Uninstall_AnyKey_Filter.bat
+!anykey-filter-driver/deploy/_install_anykey_device.ps1
+!anykey-filter-driver/deploy/_uninstall.ps1
+anykey-filter-driver/build.log
+*.sys
+
+# ── 发布产物 ──
+build/release/
+AnyKey_v*.zip
+
+# ── 用户配置（含个人键位映射，由 GUI 生成）──
+anykey_config*.json
+*.bak
+.pytest_cache/
+
+# ── 系统 / 编辑器 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── 杂项 ──
+nul

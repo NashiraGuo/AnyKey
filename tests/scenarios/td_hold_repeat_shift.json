@@ -1,0 +1,260 @@
+{
+  "name": "td_hold_repeat_shift",
+  "desc": "z长按→{shift}, auto-repeat 重复输出 shift",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "q",
+        "key2": "w",
+        "output": "{Esc}",
+        "layer": "base"
+      },
+      {
+        "key1": "z",
+        "key2": "x",
+        "output": "{Backspace}",
+        "layer": "base"
+      },
+      {
+        "key1": "a",
+        "key2": "s",
+        "output": "{Left}",
+        "layer": "base"
+      },
+      {
+        "key1": "h",
+        "key2": "j",
+        "output": "{Home}",
+        "layer": "fn1"
+      },
+      {
+        "key1": "k",
+        "key2": "l",
+        "output": "{End}",
+        "layer": "fn2"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "{F1}",
+          "dtt": "250",
+          "dh": "{F2}",
+          "dht": "200"
+        },
+        "s": {
+          "tap": "{s}",
+          "hold": "{fn2}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "{F3}",
+          "dht": "200"
+        },
+        "d": {
+          "tap": "{d}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "{F4}",
+          "dtt": "250",
+          "dh": "",
+          "dht": ""
+        },
+        "f": {
+          "tap": "{f}",
+          "hold": "",
+          "ht": "",
+          "dt": "{F5}",
+          "dtt": "250",
+          "dh": "{F6}",
+          "dht": "200"
+        },
+        "g": {
+          "tap": "{g}",
+          "hold": "",
+          "ht": "",
+          "dt": "{F7}",
+          "dtt": "250",
+          "dh": "",
+          "dht": ""
+        },
+        "h": {
+          "tap": "{h}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "{F8}",
+          "dht": "200"
+        },
+        "j": {
+          "tap": "",
+          "hold": "{fn3}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "{F9}",
+          "dht": "200"
+        },
+        "k": {
+          "tap": "{k}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "l": {
+          "tap": "",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "z": {
+          "tap": "{z}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "space": {
+          "tap": "{Space}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "{CapsLock}",
+          "dtt": "250",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "a": {
+          "tap": "A",
+          "hold": "{ctrl}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "h": {
+          "tap": "{Left}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "j": {
+          "tap": "{Down}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn2": {
+        "s": {
+          "tap": "hello ",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "k": {
+          "tap": "{Right}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "l": {
+          "tap": "{Up}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn3": {
+        "j": {
+          "tap": "{Up}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn4": {
+        "1": {
+          "tap": "RUN:notepad.exe",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "2": {
+          "tap": "^c",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "z"
+    },
+    {
+      "wait": 500
+    },
+    {
+      "dn": "z"
+    },
+    {
+      "up": "z"
+    },
+    {
+      "wait": 500
+    }
+  ],
+  "expect": [
+    {
+      "Down": "shift"
+    },
+    {
+      "Down": "shift"
+    },
+    {
+      "Up": "shift"
+    }
+  ]
+}

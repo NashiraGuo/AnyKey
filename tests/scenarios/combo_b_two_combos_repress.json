@@ -1,0 +1,115 @@
+{
+  "name": "combo_b_two_combos_repress",
+  "ahi_incompatible": true,
+  "desc": "b 同时参与两个 hold-combo：a+b->{1}、b+c->{2}。a↓ b↓(匹配1) b↑(非最后,1保持) b↓ c↓(匹配2) a↑ b↑ c↑，间隔30ms。期望 Down(1) Down(2) Up(1) Up(2)。",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "a",
+        "key2": "b",
+        "output": "{1}",
+        "layer": "base"
+      },
+      {
+        "key1": "b",
+        "key2": "c",
+        "output": "{2}",
+        "layer": "base"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "b": {
+          "tap": "",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "c": {
+          "tap": "",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "wait": 30
+    },
+    {
+      "dn": "b"
+    },
+    {
+      "wait": 30
+    },
+    {
+      "up": "b"
+    },
+    {
+      "wait": 30
+    },
+    {
+      "dn": "b"
+    },
+    {
+      "wait": 30
+    },
+    {
+      "dn": "c"
+    },
+    {
+      "wait": 30
+    },
+    {
+      "up": "a"
+    },
+    {
+      "wait": 30
+    },
+    {
+      "up": "b"
+    },
+    {
+      "wait": 30
+    },
+    {
+      "up": "c"
+    }
+  ],
+  "expect": [
+    {
+      "Down": "1"
+    },
+    {
+      "Down": "2"
+    },
+    {
+      "Up": "1"
+    },
+    {
+      "Up": "2"
+    }
+  ]
+}

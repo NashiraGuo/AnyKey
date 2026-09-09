@@ -1,0 +1,137 @@
+{
+  "name": "combo_seeking_defer",
+  "desc": "A3 / U3：combo Seeking 键抬起 → 激活并 flush 背后的 deferred 键。switch 键 a(hold=fn1) 在 waiting_stack 中，combo p+q(base) 的伙伴 p 先按下进入 Seeking（q 未按），普通键 x 被 defer 在 a 背后；然后抬起 p（Seeking 未完成被提前抬起）。验证 phase_up1_combo 的 Seeking 分支写 force_hold_up，使 p 回退为本键 tap 时在其前的层上下文(fn1) 正确解析，且背后 deferred 键 x 随之结算。",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "p",
+        "key2": "q",
+        "output": "{F9}",
+        "layer": "base"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "p": {
+          "tap": "{p}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "q": {
+          "tap": "{q}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "p": {
+          "tap": "{p}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "q": {
+          "tap": "{q}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "dn": "p"
+    },
+    {
+      "dn": "x"
+    },
+    {
+      "up": "p"
+    },
+    {
+      "up": "a"
+    },
+    {
+      "up": "x"
+    },
+    {
+      "wait": 300
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "Down": "p"
+    },
+    {
+      "Down": "x"
+    },
+    {
+      "Up": "p"
+    },
+    {
+      "LayerOff": "fn1"
+    },
+    {
+      "Up": "x"
+    }
+  ]
+}

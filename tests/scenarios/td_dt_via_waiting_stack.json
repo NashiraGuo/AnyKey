@@ -1,0 +1,61 @@
+{
+  "name": "td_dt_via_waiting_stack",
+  "desc": "C-lookup: 物理键 f 按住(Waiting, hold={fn1}) 时双击 k，k 的 dt 写在 fn1。验证 keyup Waiting 分支用 resolve_key_layer 经 waiting_stack 查到 fn1 的 dt，使双击成型（无需 fn1 实际激活）；同时 keyup 侧 td_interrupt_all 不跳过 P6，U5 force-hold 点亮 fn1 后干净反激活。",
+  "debug_log": "td_dt_via_waiting_stack",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "f": {
+          "tap": "{f}",
+          "hold": "{fn1}",
+          "ht": "200"
+        },
+        "k": {
+          "tap": "{k}"
+        }
+      },
+      "fn1": {
+        "k": {
+          "dt": "{a}"
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "f"
+    },
+    {
+      "dn": "k"
+    },
+    {
+      "up": "k"
+    },
+    {
+      "dn": "k"
+    },
+    {
+      "up": "k"
+    },
+    {
+      "up": "f"
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "Down": "a"
+    },
+    {
+      "Up": "a"
+    },
+    {
+      "LayerOff": "fn1"
+    }
+  ]
+}

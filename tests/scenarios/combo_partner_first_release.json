@@ -1,0 +1,70 @@
+{
+  "name": "combo_partner_first_release",
+  "ahi_incompatible": true,
+  "desc": "hold-combo a+b->{1}；a↓ b↓(匹配) a↑(partner先抬,无视) b↑(trigger抬起{1}) — 验证partner keyup不抬emitted",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "a",
+        "key2": "b",
+        "output": "{1}",
+        "layer": "base"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "b": {
+          "tap": "",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "dn": "b"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "up": "a"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "up": "b"
+    }
+  ],
+  "expect": [
+    {
+      "Down": "1"
+    },
+    {
+      "Up": "1"
+    }
+  ]
+}

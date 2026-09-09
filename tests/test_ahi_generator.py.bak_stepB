@@ -1,0 +1,731 @@
+"""
+AnyKey AHI 引擎生成器单元测试
+
+覆盖内容：
+- _parse_mousemove / _ahk_esc 纯函数
+- generate_ahk: 最小配置、Combo、TapDance、层、设备过滤、Debug 剥离
+
+AHI 架构要点：
+- 通过 Interception 驱动订阅设备，而非 AHK Hotkey 热键
+- 无 _managedKeys / _passKeys 数组
+- 所有按键通过 AHI_KeyEvent 回调下发
+- flowControl 在 Python 生成期求值，不生成 AHK 运行时变量
+"""
+
+import sys
+import os
+import pytest
+
+# 确保能导入 combo-gui 目录下的模块
+_test_dir = os.path.dirname(__file__)
+_combo_gui_dir = os.path.normpath(os.path.join(_test_dir, ".."))
+if _combo_gui_dir not in sys.path:
+    sys.path.insert(0, _combo_gui_dir)
+
+from ahi_generator import _parse_mousemove, _ahk_esc, generate_ahk
+
+
+# ════════════════════════════════════════════════
+# Fixtures
+# ════════════════════════════════════════════════
+
+@pytest.fixture
+def min_cfg():
+    """最小有效配置 — 空 combo、无层、无 tap dance"""
+    return {
+        "comboTime": 200,
+        "comboMap": [],
+        "layers": {"switchKeys": [], "layerDefs": []},
+        "tapDance": {
+            "enabled": False,
+            "doubleTapTerm": 250,
+            "holdTerm": 150,
+            "doubleHoldTerm": 150,
+            "keys": {},
+        },
+        "flowControl": {
+            "comboToLayer": True,
+            "comboToTapDance": True,
+            "layerToTapDance": True,
+        },
+        "subscribed_devices": [],
+    }
+
+
+# ════════════════════════════════════════════════
+# 辅助函数
+# ════════════════════════════════════════════════
+
+def _assert_contains(output, *patterns):
+    for p in patterns:
+        assert p in output, f"Expected '{p}' in output but not found."
+
+
+def _assert_not_contains(output, *patterns):
+    for p in patterns:
+        assert p not in output, f"Unexpected '{p}' found in output."
+
+
+def _count_occurrences(output, pattern):
+    return output.count(pattern)
+
+
+# ════════════════════════════════════════════════
+# 1. _ahk_esc 测试
+# ════════════════════════════════════════════════
+
+class TestAhkEsc:
+    def test_no_escape(self):
+        assert _ahk_esc("hello") == "hello"
+        assert _ahk_esc("Space") == "Space"
+        assert _ahk_esc("a") == "a"
+        assert _ahk_esc("F12") == "F12"
+
+    def test_backtick(self):
+        assert _ahk_esc("a`b") == "a``b"
+        assert _ahk_esc("``") == "````"
+        assert _ahk_esc("`") == "``"
+
+    def test_double_quote(self):
+        assert _ahk_esc('a"b') == 'a`"b'
+        assert _ahk_esc('"') == '`"'
+        assert _ahk_esc('""') == '`"`"'
+
+    def test_both(self):
+        assert _ahk_esc('`"') == '```"'
+        assert _ahk_esc('a"`b') == 'a`"``b'
+
+    def test_empty(self):
+        assert _ahk_esc("") == ""
+
+
+# ════════════════════════════════════════════════
+# 2. _parse_mousemove 测试
+# ════════════════════════════════════════════════
+
+class TestParseMousemove:
+    def test_normal(self):
+        assert _parse_mousemove("MouseMove(10, 20)") == ("10", "20")
+        assert _parse_mousemove("MouseMove(-5, 100)") == ("-5", "100")
+        assert _parse_mousemove("MouseMove(0,0)") == ("0", "0")
+
+    def test_with_spaces(self):
+        assert _parse_mousemove("MouseMove(  10 ,  20 )") == ("10", "20")
+        assert _parse_mousemove("  MouseMove(10, 20)  ") == ("10", "20")
+
+    def test_extra_args(self):
+        """多参数时只取前两个"""
+        result = _parse_mousemove("MouseMove(10, 20, 0)")
+        assert result is not None
+        assert len(result) == 2
+
+    def test_invalid_format(self):
+        assert _parse_mousemove("abc") is None
+        assert _parse_mousemove("MouseMove()") is None
+        assert _parse_mousemove("") is None
+        assert _parse_mousemove("Move(10, 20)") is None
+
+    def test_partial(self):
+        """只有一个参数——第二个默认 0，尾部逗号不产生额外效果"""
+        assert _parse_mousemove("MouseMove(10)") == ("10", "0")
+
+
+# ════════════════════════════════════════════════
+# 3a. generate_ahk — 最小配置
+# ════════════════════════════════════════════════
+
+class TestGenerateAhkMinimal:
+    """最小 AHI 配置验证"""
+
+    def test_basic_structure(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_contains(out,
+            "#Requires AutoHotkey v2.0",
+            "#SingleInstance Force",
+            'comboTime := 200',
+            'comboKeys := Map()',
+            'comboPartnerMap := Map()',
+            'holdComboMap := Map()',
+            'macroComboMap := Map()',
+        )
+
+    def test_ahi_init_present(self, min_cfg):
+        """验证 AHI 初始化代码"""
+        out = generate_ahk(min_cfg)
+        _assert_contains(out,
+            "AHI := AutoHotInterception()",
+            "AHI.GetDeviceList()",
+            "AHI.SubscribeKeyboard",
+            "AHI_KeyEvent(code, state)",
+        )
+
+    def test_all_phase_functions_present(self, min_cfg):
+        """验证 KeyDown 8个 Phase 和 KeyUp 5个 Phase"""
+        out = generate_ahk(min_cfg)
+        phase_funcs = [
+            "_Phase0Interrupt(", "_Phase1Cleanup(", "_Phase2Repeat(",
+            "_Phase3Combo(",    "_Phase4Defer(",   "_Phase5Layer(",
+            "_Phase6TapDance(", "_Phase7Final(",
+            "_PhaseUp1Pending(", "_PhaseUp2Combo(", "_PhaseUp3Layer(",
+            "_PhaseUp4TD(",     "_PhaseUp5Final(",
+        ]
+        for func in phase_funcs:
+            assert func in out, f"Missing phase function: {func}"
+
+    def test_key_down_up_entry_points(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_contains(out, "KeyDown(key_or_ctx, *) {")
+        _assert_contains(out, "KeyUp(key, *) {")
+
+    def test_phase_flag_constants(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_contains(out,
+            "F_INTERRUPT := 1", "F_CLEANUP := 2", "F_REPEAT := 4",
+            "F_COMBO := 8",    "F_DEFER := 16",  "F_LAYER := 32",
+            "F_TAPDANCE := 64", "F_FINAL := 128",
+        )
+
+    def test_reenter_and_newkeycontext(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_contains(out, "_ReEnter(")
+        _assert_contains(out, "NewKeyContext(key) {")
+
+    def test_send_functions(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_contains(out, "_SendKey(")
+        _assert_contains(out, "EmitTap(")
+        _assert_contains(out, "EmitUp(")
+        _assert_contains(out, "_ReleaseKey(")
+
+    def test_no_td_when_disabled(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_not_contains(out,
+            "tapDance := Map()",
+            "baseLayer := Map()",
+            "tdState := Map()",
+            "tapDanceDT",
+        )
+
+    def test_no_layers_when_empty(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_not_contains(out, "global kb := {")
+        _assert_not_contains(out, "kb.layerKeys := Map(")
+        _assert_contains(out, "; Layers disabled")
+
+    def test_tray_listener(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_contains(out, "OnMessage(0x5555, OnAnyKeyCommand)")
+
+    def test_on_exit_cleanup(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_contains(out, "_OnExitCleanup(")
+        _assert_contains(out, "EmitUp(keyName)")
+
+    def test_no_passkeys_in_ahi(self, min_cfg):
+        """AHI 引擎通过 Interception 捕获所有按键，无 _passKeys 数组"""
+        out = generate_ahk(min_cfg)
+        _assert_not_contains(out, "_passKeys")
+
+
+# ════════════════════════════════════════════════
+# 3b. generate_ahk — Combo 配置
+# ════════════════════════════════════════════════
+
+class TestGenerateAhkCombo:
+
+    @pytest.fixture
+    def combo_cfg(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            # hold combos（单键输出）
+            {"key1": "a", "key2": "b", "output": "{Esc}", "layer": "base"},
+            {"key1": "c", "key2": "d", "output": "{Enter}", "layer": "base"},
+            # macro combos（多键输出）
+            {"key1": "j", "key2": "k", "output": "^{c}", "layer": "base"},
+            {"key1": "u", "key2": "i", "output": "{End} .", "layer": "fn1"},
+        ]
+        return cfg
+
+    def test_hold_combo_map_structure(self, combo_cfg):
+        out = generate_ahk(combo_cfg)
+        _assert_contains(out, "holdComboMap := Map(")
+        _assert_contains(out, '"base"')
+        _assert_contains(out, '"fn1"')
+
+    def test_macro_combo_map(self, combo_cfg):
+        out = generate_ahk(combo_cfg)
+        _assert_contains(out, "macroComboMap := Map(")
+
+    def test_combo_keys_index(self, combo_cfg):
+        out = generate_ahk(combo_cfg)
+        _assert_contains(out, "comboKeys := Map(")
+        for k in ("a", "b", "c", "d", "j", "k", "u", "i"):
+            # AHI 使用 StrLower 标准化的键名
+            assert f'"{k}"' in out, f"Key '{k}' missing from comboKeys"
+
+    def test_hold_vs_macro_classification(self, combo_cfg):
+        """单键输出进 holdComboMap，多键输出进 macroComboMap"""
+        out = generate_ahk(combo_cfg)
+        hold_start = out.index("holdComboMap := Map(")
+        macro_start = out.index("macroComboMap := Map(")
+        hold_section = out[hold_start:macro_start]
+        assert "{Esc}" in hold_section
+        assert "{Enter}" in hold_section
+        # macro: ^{c} 在 macroComboMap 中
+        macro_end = out.index("comboKeys := Map(")
+        macro_section = out[macro_start:macro_end]
+        assert "^{c}" in macro_section
+
+    def test_single_char_wrapping(self, min_cfg):
+        """单字符输出应自动包装为 {x}"""
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            {"key1": "a", "key2": "b", "output": "x", "layer": "base"},
+        ]
+        out = generate_ahk(cfg)
+        _assert_contains(out, "{x}")
+
+    def test_multi_layer_combo_sections(self, min_cfg):
+        """多层 combo 应有各自的 section"""
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            {"key1": "a", "key2": "b", "output": "{x}", "layer": "base"},
+            {"key1": "a", "key2": "b", "output": "{y}", "layer": "fn1"},
+            {"key1": "a", "key2": "b", "output": "{z}", "layer": "fn2"},
+        ]
+        out = generate_ahk(cfg)
+        count = _count_occurrences(out, "holdComboMap := Map(")
+        assert count == 1  # 只有一层定义
+        for layer in ('"base"', '"fn1"', '"fn2"'):
+            assert layer in out
+
+    def test_combo_multi_partner(self, min_cfg):
+        """一个键有多个 combo 伙伴"""
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            {"key1": "a", "key2": "b", "output": "{x}", "layer": "base"},
+            {"key1": "a", "key2": "c", "output": "{y}", "layer": "base"},
+            {"key1": "a", "key2": "d", "output": "{z}", "layer": "base"},
+        ]
+        out = generate_ahk(cfg)
+        _assert_contains(out, '"a"')
+
+    def test_empty_combo_map(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_contains(out,
+            "holdComboMap := Map()",
+            "macroComboMap := Map()",
+            "comboKeys := Map()",
+            "comboPartnerMap := Map()",
+        )
+
+
+# ════════════════════════════════════════════════
+# 3c. generate_ahk — TapDance 配置
+# ════════════════════════════════════════════════
+
+class TestGenerateAhkTapDance:
+
+    @pytest.fixture
+    def td_cfg(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["tapDance"]["enabled"] = True
+        cfg["tapDance"]["keys"] = {
+            "{Space}": {
+                "hold": "",
+                "doubleTap": "{CapsLock}",
+                "doubleHold": "{Tab}",
+            },
+            "{Tab}": {
+                "hold": "{Enter}",
+                "doubleTap": "",
+                "doubleHold": "",
+            },
+        }
+        cfg["layers"] = cfg.get("layers", {})
+        cfg["layers"]["baseLayer"] = {
+            "Space": "{Space}",
+            "Tab": "{Tab}",
+        }
+        return cfg
+
+    def test_td_globals_present(self, td_cfg):
+        out = generate_ahk(td_cfg)
+        _assert_contains(out,
+            "global tapDance := Map()",
+            "global tdState := Map()",
+            'kb.layers["base"] := Map(',
+            "global keysDeferredByTapdance := Map()",
+            "tapDanceDT := 250",
+            "tapDanceHT := 150",
+            "tapDanceDH := 150",
+        )
+
+    def test_base_layer_entries(self, td_cfg):
+        """baseLayer 键名使用 AHI 标准规范化形式（已合并到 kb.layers["base"]）"""
+        out = generate_ahk(td_cfg)
+        # AHI callback 对键名做 StrLower 处理
+        _assert_contains(out, 'kb.layers["base"]')
+        assert 'kb.layers["base"]' in out
+
+    def test_tap_dance_entries(self, td_cfg):
+        out = generate_ahk(td_cfg)
+        _assert_contains(out,
+            'hold: "{Enter}"',
+            'doubleTap: "{CapsLock}"',
+            'doubleHold: "{Tab}"',
+        )
+
+    def test_td_tap_only_no_hold_entry(self, min_cfg):
+        """仅 tap（无 hold/doubleTap/doubleHold）不生成 TD hold 条目"""
+        cfg = dict(min_cfg)
+        cfg["tapDance"]["enabled"] = True
+        cfg["tapDance"]["keys"] = {
+            "{A}": {"hold": "", "doubleTap": "", "doubleHold": ""},
+        }
+        cfg["layers"] = cfg.get("layers", {})
+        cfg["layers"]["baseLayer"] = {"A": "{A}"}
+        out = generate_ahk(cfg)
+        # 无显式 hold/doubleTap → 无 tdDance 条目
+        _assert_not_contains(out, 'hold:')
+
+    def test_pass_through_functions_exist(self, td_cfg):
+        """AHI 引擎中 _KeyDownPassThrough/_KeyUpPassThrough 作为函数定义存在"""
+        out = generate_ahk(td_cfg)
+        _assert_contains(out,
+            "_KeyDownPassThrough(key, *) {",
+            "_KeyUpPassThrough(key, *) {",
+        )
+
+    def test_combo_map_key_normalization(self, min_cfg):
+        """Combo 键名在 AHI 中会被 StrLower"""
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            {"key1": "A", "key2": "B", "output": "{Esc}", "layer": "base"},
+        ]
+        out = generate_ahk(cfg)
+        # _norm_key 将 A/a → 'a'，B/b → 'b'
+        _assert_contains(out, '"a"')
+        _assert_contains(out, '"b"')
+
+    def test_slot_mapping_no_conflict(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["tapDance"]["enabled"] = True
+        cfg["tapDance"]["keys"] = {
+            "{W}": {"hold": "{Up}", "doubleTap": "", "doubleHold": ""},
+            "{X}": {"hold": "{Down}", "doubleTap": "", "doubleHold": ""},
+        }
+        cfg["layers"] = cfg.get("layers", {})
+        cfg["layers"]["baseLayer"] = {"W": "{W}", "X": "{X}"}
+        out = generate_ahk(cfg)
+        _assert_contains(out, 'hold: "{Up}"')
+        _assert_contains(out, 'hold: "{Down}"')
+        _assert_contains(out, 'hold: "{Up}"')
+        _assert_contains(out, 'hold: "{Down}"')
+
+
+# ════════════════════════════════════════════════
+# 3d. generate_ahk — 层配置
+# ════════════════════════════════════════════════
+
+class TestGenerateAhkLayer:
+
+    @pytest.fixture
+    def layer_cfg(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["layers"] = {
+            "switchKeys": ["XButton1", "XButton2"],
+            "layerDefs": [
+                {"keys": {"a": "{Esc}", "b": "{Enter}"}},
+                {"keys": {"c": "{Tab}"}},
+            ],
+        }
+        return cfg
+
+    def test_kb_objects_and_layer_keys(self, layer_cfg):
+        out = generate_ahk(layer_cfg)
+        _assert_contains(out,
+            "global kb := {",
+            "kb.layerKeys := Map(",
+        )
+
+    def test_layer_entries(self, layer_cfg):
+        out = generate_ahk(layer_cfg)
+        _assert_contains(out,
+            'kb.layers["fn1"] := Map(',
+            'kb.layers["fn2"] := Map(',
+        )
+
+    def test_layer_key_mappings(self, layer_cfg):
+        out = generate_ahk(layer_cfg)
+        _assert_contains(out, '"a", "{Esc}"')
+        _assert_contains(out, '"b", "{Enter}"')
+        _assert_contains(out, '"c", "{Tab}"')
+
+    def test_layer_switching_in_pipeline(self, layer_cfg):
+        """AHI 中层切换通过管道 Phase5 ResolveLayer 处理，无需 LayerTap hotkey"""
+        out = generate_ahk(layer_cfg)
+        # AHI 不使用 LayerTap（无 Hotkey 注册），通过管道处理
+        _assert_not_contains(out, "LayerTapDown")
+        _assert_not_contains(out, "LayerTapUp")
+        # 但 kb 对象和 layerKeys 数据结构应存在
+        _assert_contains(out, "kb.layerKeys := Map(")
+
+    def test_layer_tap_suppressed_when_td_enabled(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["tapDance"]["enabled"] = True
+        cfg["tapDance"]["keys"] = {}
+        cfg["layers"] = {
+            "switchKeys": ["Space"],
+            "layerDefs": [{"keys": {"a": "{b}"}}],
+        }
+        out = generate_ahk(cfg)
+        _assert_not_contains(out, "LayerTapDown")
+        _assert_not_contains(out, "LayerTapUp")
+
+    def test_empty_layers_skipped(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_not_contains(out, "global kb := {")
+        _assert_not_contains(out, "kb.layerKeys := Map(")
+
+    def test_default_switch_keys(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["layers"] = {
+            "switchKeys": [],
+            "layerDefs": [{"keys": {"a": "b"}}],
+        }
+        out = generate_ahk(cfg)
+        _assert_contains(out, '"xbutton1"')
+
+    def test_layer_with_td_slot_index(self, min_cfg):
+        """TD 启用时层映射用 slot 名做索引（冲突消解）"""
+        cfg = dict(min_cfg)
+        cfg["tapDance"]["enabled"] = True
+        cfg["tapDance"]["keys"] = {
+            "{Q}": {"hold": "", "doubleTap": "", "doubleHold": ""},
+        }
+        cfg["layers"] = {
+            "baseLayer": {"A": "{Q}"},
+            "switchKeys": ["Space"],
+            "layerDefs": [
+                {"keys": {"a": "{z}"}},
+            ],
+        }
+        out = generate_ahk(cfg)
+        # baseLayer: A→{Q} → 物理键 Q 有 TD 条目 → 冲突，A 的 slot = "q_1"
+        _assert_contains(out, '"{q_1}"')
+
+
+# ════════════════════════════════════════════════
+# 3e. 设备过滤、Debug 剥离、函数调用收集
+# ════════════════════════════════════════════════
+
+class TestGenerateAhkDeviceDebug:
+
+    def test_device_filter_enabled(self, min_cfg):
+        """有订阅设备时生成 _ALLOWED 白名单"""
+        cfg = dict(min_cfg)
+        cfg["subscribed_devices"] = [
+            {"vid": "0x046D", "pid": "0xC077"},
+            {"vid": "0x04F2", "pid": "0x0116"},
+        ]
+        out = generate_ahk(cfg)
+        _assert_contains(out, "global _ALLOWED := Map(")
+        _assert_contains(out, "0x046D")
+        _assert_contains(out, "0xC077")
+        _assert_contains(out, "0x04F2")
+        _assert_contains(out, "0x0116")
+
+    def test_device_filter_disabled(self, min_cfg):
+        out = generate_ahk(min_cfg)
+        _assert_not_contains(out, "_ALLOWED := Map")
+
+    def test_debug_mode_off(self, min_cfg):
+        out = generate_ahk(min_cfg, include_debug=False)
+        _assert_not_contains(out,
+            "Debug(",
+            "TraceEnter",
+            "_AssertState(",
+        )
+
+    def test_debug_mode_on(self, min_cfg):
+        out = generate_ahk(min_cfg, include_debug=True)
+        _assert_contains(out,
+            "Debug(msg, level := ",
+            "global _DEBUG := true",
+        )
+
+    def test_trace_functions_in_debug(self, min_cfg):
+        out = generate_ahk(min_cfg, include_debug=True)
+        _assert_contains(out, "TraceEnter")
+        _assert_contains(out, "TraceLeave")
+
+    def test_func_call_collection_combo(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            {"key1": "a", "key2": "b", "output": "MouseMove(10, 20)", "layer": "base"},
+        ]
+        out = generate_ahk(cfg)
+        _assert_contains(out, "MouseMove(10, 20)")
+
+    def test_func_call_collection_layer_and_td(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["tapDance"]["enabled"] = True
+        cfg["tapDance"]["keys"] = {
+            "Space": {"tap": "{Space}", "hold": "Click(2)", "doubleTap": "", "doubleHold": ""},
+        }
+        cfg["layers"] = {
+            "switchKeys": ["Space"],
+            "layerDefs": [{"keys": {"a": "Send(\"hello\")"}}],
+        }
+        out = generate_ahk(cfg)
+        _assert_contains(out, "Click(2)")
+        _assert_contains(out, 'Send("hello")')
+
+    def test_combo_macro_skip_flags(self, min_cfg):
+        """macro combo 完成后根据流控设置跳过标志"""
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            {"key1": "a", "key2": "b", "output": "^{c}", "layer": "base"},
+        ]
+        # comboToLayer=true → 跳过标志含 F_LAYER
+        out = generate_ahk(cfg)
+        assert "ctx.flags |= F_DEFER | F_LAYER | F_TAPDANCE" in out
+        # comboToLayer=false → 跳过标志不含 F_LAYER
+        cfg2 = dict(cfg)
+        cfg2["flowControl"]["comboToLayer"] = False
+        out2 = generate_ahk(cfg2)
+        assert "ctx.flags |= F_DEFER | F_TAPDANCE" in out2
+        # 确保 F_LAYER 不紧跟在 F_DEFER | F_TAPDANCE 后面（单独一行，不含 F_LAYER）
+        lines2 = out2.split('\n')
+        macro_skip_line = [l.strip() for l in lines2 if l.strip().startswith('ctx.flags |= F_DEFER') and 'TAPDANCE' in l and 'F_FINAL' not in l][0]
+        assert 'F_LAYER' not in macro_skip_line
+
+    def test_flow_layer_to_td_off(self, min_cfg):
+        """layerToTapDance=false → Phase5 添加 F_TAPDANCE 跳过标志"""
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            {"key1": "a", "key2": "b", "output": "^{c}", "layer": "base"},
+        ]
+        cfg["flowControl"]["layerToTapDance"] = False
+        out = generate_ahk(cfg)
+        _assert_contains(out, "F_TAPDANCE  ; Layer→TD 关闭且确实映射了才拦截")
+
+    def test_flow_combo_to_td_force_flag(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            {"key1": "a", "key2": "b", "output": "^{c}", "layer": "base"},
+        ]
+        cfg["flowControl"]["comboToTapDance"] = True
+        out = generate_ahk(cfg)
+        _assert_contains(out, "tdForce := true")
+
+    def test_flow_combo_to_td_off_no_force(self, min_cfg):
+        cfg = dict(min_cfg)
+        cfg["comboMap"] = [
+            {"key1": "a", "key2": "b", "output": "^{c}", "layer": "base"},
+        ]
+        cfg["flowControl"]["comboToTapDance"] = False
+        out = generate_ahk(cfg)
+        _assert_not_contains(out, "tdForce := true")
+
+    def test_debug_on_retain_assert(self, min_cfg):
+        out = generate_ahk(min_cfg, include_debug=True)
+        _assert_contains(out, "_AssertState(")
+
+
+# ════════════════════════════════════════════════
+# 3f. 完整场景端到端测试
+# ════════════════════════════════════════════════
+
+class TestGenerateAhkFullScenario:
+
+    @pytest.fixture
+    def full_cfg(self):
+        return {
+            "comboTime": 120,
+            "comboMap": [
+                {"key1": "a", "key2": "b", "output": "{Esc}", "layer": "base"},
+                {"key1": "j", "key2": "k", "output": "^{c}", "layer": "base"},
+                {"key1": "u", "key2": "i", "output": "{End} .", "layer": "fn1"},
+            ],
+            "layers": {
+                "baseLayer": {"Space": "{Space}"},
+                "switchKeys": ["Space", "Tab"],
+                "layerDefs": [
+                    {
+                        "keys": {"w": "{Up}", "a": "{Left}", "s": "{Down}", "d": "{Right}"},
+                        "keyMap": None,
+                    },
+                    {
+                        "keys": {"1": "{F1}", "2": "{F2}"},
+                        "keyMap": None,
+                    },
+                ],
+            },
+            "tapDance": {
+                "enabled": True,
+                "doubleTapTerm": 250,
+                "holdTerm": 200,
+                "doubleHoldTerm": 200,
+                "keys": {
+                    "{Space}": {
+                        "hold": "",
+                        "doubleTap": "{CapsLock}",
+                        "doubleHold": "",
+                    },
+                },
+            },
+            "flowControl": {
+                "comboToLayer": True,
+                "comboToTapDance": True,
+                "layerToTapDance": True,
+            },
+            "subscribed_devices": [],
+        }
+
+    def test_full_output_structure(self, full_cfg):
+        out = generate_ahk(full_cfg, include_debug=False)
+        # 基本结构
+        _assert_contains(out,
+            "#Requires AutoHotkey v2.0",
+            "comboTime := 120",
+        )
+        # AHI 初始化
+        _assert_contains(out,
+            "AHI := AutoHotInterception()",
+            "AHI.SubscribeKeyboard",
+        )
+        # Combo 数据
+        _assert_contains(out,
+            "holdComboMap := Map(",
+            "macroComboMap := Map(",
+        )
+        # TD 数据
+        _assert_contains(out,
+            "global tapDance := Map()",
+            'kb.layers["base"] := Map(',
+            "tapDanceDT := 250",
+        )
+        # 层数据
+        _assert_contains(out,
+            "global kb := {",
+            'kb.layers["fn1"] := Map(',
+            'kb.layers["fn2"] := Map(',
+        )
+        # Phase 函数
+        _assert_contains(out,
+            "_Phase0Interrupt(",
+            "_Phase7Final(",
+            "_PhaseUp1Pending(",
+            "_PhaseUp5Final(",
+        )
+        # 无 Debug（非 debug 模式）
+        _assert_not_contains(out, "Debug(msg, level := ")
+
+    def test_full_output_with_debug(self, full_cfg):
+        out = generate_ahk(full_cfg, include_debug=True)
+        _assert_contains(out,
+            "Debug(msg, level := ",
+            "global _DEBUG := true",
+        )

@@ -1,0 +1,78 @@
+{
+  "name": "mod_10ms_6up_first",
+  "ahi_incompatible": true,
+  "desc": "z hold=shift, 6 普通; z↓6↓ 6↑z↑ (10ms) — 被defer的6的keyup先到; 关键: defer后 keyup先到能否正常",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "z": {
+          "tap": "{z}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "6": {
+          "tap": "{6}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "z"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "dn": "6"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "up": "6"
+    },
+    {
+      "wait": 10
+    },
+    {
+      "up": "z"
+    }
+  ],
+  "expect": [
+    {
+      "Down": "shift"
+    },
+    {
+      "Down": "6"
+    },
+    {
+      "Up": "6"
+    },
+    {
+      "Up": "shift"
+    }
+  ]
+}

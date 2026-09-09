@@ -1,0 +1,9 @@
+# AnyKey GUI 运行依赖（Python 3.12+，Windows）
+# 安装: pip install -r requirements.txt
+customtkinter>=5.2.2
+Pillow>=10.0
+psutil>=5.9
+pywin32>=306; sys_platform == "win32"
+
+# 构建发布包需要（PyInstaller 打包 GUI）:
+# pip install pyinstaller

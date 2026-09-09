@@ -1,0 +1,98 @@
+{
+  "name": "stack_mod_layer_key_fast",
+  "ahi_incompatible": true,
+  "desc": "m=shift, f=fn1, c普通(fn1.c->{x}); m↓(250) f↓(250) c↓ c↑ f↑ m↑ — 普通键keyup先到, 测试keyup重叠",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "m": {
+          "tap": "{m}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "f": {
+          "tap": "{f}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "c": {
+          "tap": "{c}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "c": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "m"
+    },
+    {
+      "wait": 250
+    },
+    {
+      "dn": "f"
+    },
+    {
+      "wait": 250
+    },
+    {
+      "dn": "c"
+    },
+    {
+      "up": "c"
+    },
+    {
+      "up": "f"
+    },
+    {
+      "up": "m"
+    }
+  ],
+  "expect": [
+    {
+      "Down": "shift"
+    },
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "Down": "x"
+    },
+    {
+      "Up": "x"
+    },
+    {
+      "LayerOff": "fn1"
+    },
+    {
+      "Up": "shift"
+    }
+  ]
+}

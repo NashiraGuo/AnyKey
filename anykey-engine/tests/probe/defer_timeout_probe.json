@@ -1,0 +1,187 @@
+{
+  "name": "defer_timeout_probe",
+  "desc": "探测 single_key_timeout 中 keys_deferred 分支是否可达：l(switch) 后按 k(combo 键, 搭档 m 不按) → k 超时时应进入 Waiting 且被 SILENCE 跳过 defer",
+  "config": {
+    "comboTime": 100,
+    "comboMap": [
+      {
+        "key1": "k",
+        "key2": "m",
+        "output": "{End}",
+        "layer": "base"
+      }
+    ],
+    "tapDance": {
+      "holdTerm": 200,
+      "doubleTapTerm": 250,
+      "doubleHoldTerm": 200,
+      "base": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "{F1}",
+          "dtt": "250",
+          "dh": "{F2}",
+          "dht": "200"
+        },
+        "h": {
+          "tap": "{h}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "{F8}",
+          "dht": "200"
+        },
+        "j": {
+          "tap": "{j}",
+          "hold": "{fn3}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "{F9}",
+          "dht": "200"
+        },
+        "k": {
+          "tap": "{k}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "l": {
+          "tap": "",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "m": {
+          "tap": "{m}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "z": {
+          "tap": "{z}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "space": {
+          "tap": "{Space}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "{CapsLock}",
+          "dtt": "250",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "a": {
+          "tap": "A",
+          "hold": "{ctrl}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "h": {
+          "tap": "{Left}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "j": {
+          "tap": "{Down}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn2": {
+        "s": {
+          "tap": "hello ",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "k": {
+          "tap": "{Right}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "l": {
+          "tap": "{Up}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn3": {
+        "j": {
+          "tap": "{Up}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn4": {
+        "1": {
+          "tap": "RUN:notepad.exe",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "l"
+    },
+    {
+      "dn": "k"
+    },
+    {
+      "wait": 500
+    }
+  ],
+  "expect": []
+}

@@ -1,0 +1,120 @@
+{
+  "name": "stack_layer_mod_combo_fast",
+  "ahi_incompatible": true,
+  "desc": "f=fn1, s=shift, h+j combo(fn1->{Home}); f↓(250) s↓(250) h↓ j↓ j↑ h↑ s↑ f↑ — combo keyup先到",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "h",
+        "key2": "j",
+        "output": "{Home}",
+        "layer": "fn1"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "f": {
+          "tap": "{f}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "s": {
+          "tap": "{s}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "h": {
+          "tap": "{h}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "j": {
+          "tap": "{j}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "s": {
+          "tap": "",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "f"
+    },
+    {
+      "wait": 250
+    },
+    {
+      "dn": "s"
+    },
+    {
+      "wait": 250
+    },
+    {
+      "dn": "h"
+    },
+    {
+      "dn": "j"
+    },
+    {
+      "up": "j"
+    },
+    {
+      "up": "h"
+    },
+    {
+      "up": "s"
+    },
+    {
+      "up": "f"
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "Down": "shift"
+    },
+    {
+      "Down": "Home"
+    },
+    {
+      "Up": "Home"
+    },
+    {
+      "Up": "shift"
+    },
+    {
+      "LayerOff": "fn1"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "name": "mod_slow_defer",
+  "ahi_incompatible": true,
+  "desc": "z hold=shift; z↓ (100) 6↓ (250, defer后shift触发) 6↑ z↑ — 6 被defer后随shift生效",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "z": {
+          "tap": "{z}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "6": {
+          "tap": "{6}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "z"
+    },
+    {
+      "wait": 100
+    },
+    {
+      "dn": "6"
+    },
+    {
+      "wait": 250
+    },
+    {
+      "up": "6"
+    },
+    {
+      "up": "z"
+    }
+  ],
+  "expect": [
+    {
+      "Down": "shift"
+    },
+    {
+      "Down": "6"
+    },
+    {
+      "Up": "6"
+    },
+    {
+      "Up": "shift"
+    }
+  ]
+}

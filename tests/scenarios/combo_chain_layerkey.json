@@ -1,0 +1,113 @@
+{
+  "name": "combo_chain_layerkey",
+  "desc": "combo 链激活层：base 内 combo q+w → {fn1}；fn1 内 combo w+e → {fn2}。操作 down q down w up w down w down e up q up w up e，验证『combo 输出层键→激活层→该层内 combo 再输出层键→再激活层』的多级链式。",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "q",
+        "key2": "w",
+        "output": "{fn1}",
+        "layer": "base"
+      },
+      {
+        "key1": "w",
+        "key2": "e",
+        "output": "{fn2}",
+        "layer": "fn1"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "q": {
+          "tap": "{q}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "w": {
+          "tap": "{w}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "e": {
+          "tap": "{e}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "w": {
+          "tap": "{w}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "e": {
+          "tap": "{e}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "q"
+    },
+    {
+      "dn": "w"
+    },
+    {
+      "up": "w"
+    },
+    {
+      "dn": "w"
+    },
+    {
+      "dn": "e"
+    },
+    {
+      "up": "q"
+    },
+    {
+      "up": "w"
+    },
+    {
+      "up": "e"
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "LayerOn": "fn2"
+    },
+    {
+      "LayerOff": "fn1"
+    },
+    {
+      "LayerOff": "fn2"
+    }
+  ]
+}

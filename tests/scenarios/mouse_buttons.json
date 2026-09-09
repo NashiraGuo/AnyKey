@@ -1,0 +1,122 @@
+{
+  "name": "mouse_buttons",
+  "desc": "鼠标键名统一：MouseLeft/MouseRight/MouseMiddle/Side1/Side2/WheelUp/Down/Left/Right passthrough及MouseRight→mousemiddle映射",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "MouseRight": {
+          "tap": "{mousemiddle}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "MouseLeft"
+    },
+    {
+      "up": "MouseLeft"
+    },
+    {
+      "dn": "MouseRight"
+    },
+    {
+      "up": "MouseRight"
+    },
+    {
+      "dn": "MouseMiddle"
+    },
+    {
+      "up": "MouseMiddle"
+    },
+    {
+      "dn": "WheelUp"
+    },
+    {
+      "up": "WheelUp"
+    },
+    {
+      "dn": "WheelDown"
+    },
+    {
+      "up": "WheelDown"
+    },
+    {
+      "dn": "WheelRight"
+    },
+    {
+      "up": "WheelRight"
+    },
+    {
+      "dn": "WheelLeft"
+    },
+    {
+      "up": "WheelLeft"
+    },
+    {
+      "dn": "MouseSide1"
+    },
+    {
+      "up": "MouseSide1"
+    },
+    {
+      "dn": "MouseSide2"
+    },
+    {
+      "up": "MouseSide2"
+    }
+  ],
+  "expect": [
+    {
+      "Down": "mouseleft"
+    },
+    {
+      "Up": "mouseleft"
+    },
+    {
+      "Down": "mousemiddle"
+    },
+    {
+      "Up": "mousemiddle"
+    },
+    {
+      "Down": "mousemiddle"
+    },
+    {
+      "Up": "mousemiddle"
+    },
+    {
+      "Down": "wheelup"
+    },
+    {
+      "Down": "wheeldown"
+    },
+    {
+      "Down": "wheelright"
+    },
+    {
+      "Down": "wheelleft"
+    },
+    {
+      "Down": "mouseside1"
+    },
+    {
+      "Up": "mouseside1"
+    },
+    {
+      "Down": "mouseside2"
+    },
+    {
+      "Up": "mouseside2"
+    }
+  ]
+}

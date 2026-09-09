@@ -1,0 +1,63 @@
+{
+  "name": "combo_layerkey_output",
+  "desc": "combo 输出为层键：base 内 combo p+q → {fn2} 命中后激活 fn2 层。验证引擎支持 combo output 是层键（activate_layer）且能正确反激活。此前夹具库零覆盖此路径（48 个 combo 夹具 output 全是物理键）。",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "p",
+        "key2": "q",
+        "output": "{fn2}",
+        "layer": "base"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "p": {
+          "tap": "{p}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "q": {
+          "tap": "{q}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "p"
+    },
+    {
+      "dn": "q"
+    },
+    {
+      "up": "p"
+    },
+    {
+      "up": "q"
+    },
+    {
+      "wait": 300
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn2"
+    },
+    {
+      "LayerOff": "fn2"
+    }
+  ]
+}

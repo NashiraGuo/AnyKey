@@ -1,0 +1,36 @@
+{
+  "engine": "rust",
+  "rust": {
+    "enabled": true
+  },
+  "comboTime": 35,
+  "comboMap": [],
+  "layers": {
+    "enabled": true,
+    "baseLayer": {
+      "q": {
+        "tap": "w"
+      },
+      "mouse_right": {
+        "tap": "a"
+      }
+    },
+    "switchKeys": [],
+    "layerDefs": []
+  },
+  "tapDance": {
+    "holdTerm": 150,
+    "doubleTapTerm": 250,
+    "doubleHoldTerm": 150,
+    "keys": {}
+  },
+  "flowControl": {
+    "comboToLayer": true,
+    "comboToTapDance": true
+  },
+  "leader": {
+    "sequences": []
+  },
+  "device_aliases": {},
+  "subscribed_devices": []
+}

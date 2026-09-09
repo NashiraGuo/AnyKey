@@ -1,0 +1,120 @@
+{
+  "name": "defer_flush_behind",
+  "desc": "flush-behind 通道（phase_up8_flushbehind，即 §5 B2.2/2.3 的 TODO 加速通道）：switch 键 a(hold={fn1}) 进入 waiting_stack，普通键 x 被 defer 在其背后(td_key=a)。本场景 a 是『快按快放』——抬起时仍处 Waiting 从而判定为 tap（fn1 从未激活），且过程中没有其它键来 flush x。此时 x 只能靠 a 抬起时的 phase_up8_flushbehind 把自己 flush 出去，否则会残留卡死。验证：anchor 以 tap 结束时，其背后绑定的延迟键仍被该通道正确结算发出（defer 键在 defer 时刻锁定为 base 层上下文，故此处 x 发 {x} 而非 fn1 的 {X}）。此通道是该场景 x 唯一能被发出的路径，是强回归守卫。",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "y": {
+          "tap": "{y}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{X}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "y": {
+          "tap": "{y}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn2": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "dn": "x"
+    },
+    {
+      "up": "a"
+    },
+    {
+      "up": "x"
+    },
+    {
+      "wait": 300
+    }
+  ],
+  "expect": [
+    {
+      "Down": "a"
+    },
+    {
+      "Up": "a"
+    },
+    {
+      "Down": "x"
+    },
+    {
+      "Up": "x"
+    }
+  ]
+}

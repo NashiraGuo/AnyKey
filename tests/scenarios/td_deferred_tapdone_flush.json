@@ -1,0 +1,73 @@
+{
+  "name": "td_deferred_tapdone_flush",
+  "desc": "这个功能已经用抬起发送的h打断space的TD状态代替。之前的修改是修复bug的中间产物。【已失效描述：延迟键释放时源头键已 TapDone：加速通道须发完整 down+up(补 Up space)，锁住 flush_tapdone_as_tap 修复】",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "h": {
+          "tap": "{h}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "space": {
+          "tap": "{Space}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "{CapsLock}",
+          "dtt": "250",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "h": {
+          "tap": "{Left}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "space"
+    },
+    {
+      "dn": "h"
+    },
+    {
+      "up": "space"
+    },
+    {
+      "up": "h"
+    },
+    {
+      "wait": 500
+    }
+  ],
+  "expect": [
+    {
+      "Down": "Space"
+    },
+    {
+      "Up": "Space"
+    },
+    {
+      "Down": "h"
+    },
+    {
+      "Up": "h"
+    }
+  ]
+}

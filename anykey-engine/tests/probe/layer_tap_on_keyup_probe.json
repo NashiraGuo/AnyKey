@@ -1,0 +1,46 @@
+{
+  "name": "layer_tap_on_keyup_probe",
+  "desc": "探测 keyup 时 tap 值为层键是否会被误发：a(hold=shift, tap={fn1}, 无 dt/dh)快按快放。UP 时 Waiting→无 dt/dh→Tap→resolve→{fn1}→phase_up6_output。若 is_layer_key 守卫缺失则会二次激活 fn1",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "layers": {
+      "enabled": true,
+      "baseLayer": {
+        "a": {
+          "tap": "{fn1}",
+          "hold": "{shift}",
+          "ht": "200"
+        }
+      },
+      "switchKeys": [],
+      "layerDefs": [
+        {
+          "name": "fn1",
+          "blockHold": false,
+          "keyMap": {
+            "b": { "tap": "{b}" }
+          }
+        }
+      ]
+    },
+    "tapDance": {
+      "enabled": true,
+      "holdTerm": 200
+    },
+    "flowControl": {
+      "comboToLayer": false,
+      "comboToTapDance": false
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    { "dn": "a" },
+    { "up": "a" },
+    { "wait": 500 }
+  ],
+  "expect": [
+    { "Down": "b" },
+    { "Up": "b" }
+  ]
+}

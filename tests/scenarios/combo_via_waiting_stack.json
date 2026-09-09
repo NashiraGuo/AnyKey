@@ -1,0 +1,98 @@
+{
+  "name": "combo_via_waiting_stack",
+  "desc": "match_combo_unified 新匹配顺序（§7.4）：combo 先查 waiting_stack 层键目标层，再查活跃层栈，最后 base。本场景 switch 键 a(hold=fn1) 仅处于 Waiting（hold 未到期、fn1 尚未激活），combo p+q 仅定义在 fn1（base 无）。连续快按 p、q 应在 a 的 hold 到期前经 waiting_stack 命中 fn1 的 combo，验证『未激活层经 waiting_stack 匹配 combo』这条新路径（区别于 combo_fn1_hj_home 的已激活层匹配）。",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [
+      {
+        "key1": "p",
+        "key2": "q",
+        "output": "{F12}",
+        "layer": "fn1"
+      }
+    ],
+    "tapDance": {
+      "base": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "p": {
+          "tap": "{p}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "q": {
+          "tap": "{q}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      },
+      "fn1": {
+        "a": {
+          "tap": "{a}",
+          "hold": "{fn1}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "p": {
+          "tap": "{p}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "q": {
+          "tap": "{q}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "a"
+    },
+    {
+      "dn": "p"
+    },
+    {
+      "dn": "q"
+    },
+    {
+      "wait": 300
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn1"
+    },
+    {
+      "Down": "F12"
+    }
+  ]
+}

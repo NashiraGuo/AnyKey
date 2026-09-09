@@ -1,0 +1,47 @@
+{
+  "name": "td_dh_layerkey_normal",
+  "desc": "doublehold 作为层键的正常激活（独立双击 → dh_timer 点亮层）：base 层 b 的 doubleHold={fn2}，无其它层激活时独立双击 b，dh_timer 到期应点亮 fn2 再干净反激活。覆盖『doublehold 当层键』的 dh_timer 结算路径（既有 td_nodt_dh_s 等验的是 doublehold 当物理键，非层键）。",
+  "debug_log": "td_dh_layerkey_normal",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "b": {
+          "tap": "{b}",
+          "dh": "{fn2}",
+          "dht": "200"
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "b"
+    },
+    {
+      "up": "b"
+    },
+    {
+      "dn": "b"
+    },
+    {
+      "wait": 500
+    },
+    {
+      "up": "b"
+    },
+    {
+      "wait": 500
+    }
+  ],
+  "expect": [
+    {
+      "LayerOn": "fn2"
+    },
+    {
+      "LayerOff": "fn2"
+    }
+  ]
+}

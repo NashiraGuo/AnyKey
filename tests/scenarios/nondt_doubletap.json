@@ -1,0 +1,69 @@
+{
+  "name": "nondt_doubletap",
+  "ahi_incompatible": true,
+  "desc": "x 仅 tap={x} (无 dt/dh); x↓x↑x↓x↑ 快速双按 — 期待两个独立 tap, 不冒出 doubletap/null",
+  "config": {
+    "comboTime": 200,
+    "comboMap": [],
+    "tapDance": {
+      "base": {
+        "z": {
+          "tap": "{z}",
+          "hold": "{shift}",
+          "ht": "200",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "6": {
+          "tap": "{6}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        },
+        "x": {
+          "tap": "{x}",
+          "hold": "",
+          "ht": "",
+          "dt": "",
+          "dtt": "",
+          "dh": "",
+          "dht": ""
+        }
+      }
+    },
+    "subscribed_devices": []
+  },
+  "steps": [
+    {
+      "dn": "x"
+    },
+    {
+      "up": "x"
+    },
+    {
+      "dn": "x"
+    },
+    {
+      "up": "x"
+    }
+  ],
+  "expect": [
+    {
+      "Down": "x"
+    },
+    {
+      "Up": "x"
+    },
+    {
+      "Down": "x"
+    },
+    {
+      "Up": "x"
+    }
+  ]
+}
