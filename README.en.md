@@ -8,11 +8,11 @@ AnyKey is a **keyboard & mouse remapping + runtime control + system-level input 
 
 ### Why a custom kernel driver? — fixing Interception's device limit
 
-The popular Interception driver has an architectural flaw: **the whole system supports at most 10 input devices**. Plug in a second keyboard, an external macro pad, or add a few virtual devices, and device #11 simply stops working. AnyKey's own UpperFilter driver **removes this limit entirely** — connect as many keyboards and mice as you like, and hot-plug and sleep/wake compatibility come along for free.
+The popular Interception driver has a hard flaw: **10 input devices max for the whole system**. A second keyboard, a macro pad, a few virtual devices — and device #11 just stops working. AnyKey's own UpperFilter driver kills that limit — hook up as many keyboards and mice as you want, and hot-plug plus sleep/wake come fixed for free.
 
-### An honest note about Test Mode
+### About Test Mode — the honest truth
 
-Loading a driver in normal mode requires Microsoft-recognized signing (an EV code-signing certificate plus WHQL certification). **Those costs are currently beyond what I can afford as an independent developer** (certificate annual fees plus certification testing add up), so this version can only run in **Windows Test Signing mode**, with a permanent "Test Mode" watermark at the bottom-right of the desktop. This is a **funding issue, not a technical compromise** — once the project can carry the cost, proper signing will follow and this limitation will be removed (see the roadmap). Please read the [full security & limitations notes](#2-installation) before installing.
+Loading a driver the normal way requires Microsoft signing (an EV code-signing certificate plus WHQL certification). **It's just too expensive, and I'm not paying for it right now** — for a solo developer that money buys nothing users can feel. So this version runs in **Windows Test Signing mode**, with a permanent "Test Mode" watermark in the corner of your desktop. If the project ever earns its own signing, the watermark goes away (see the roadmap). If that bothers you, read the [full installation notes](#2-installation) before deciding whether to install.
 
 Compared with other remapping tools, AnyKey has two fundamental advantages rooted in its low-level architecture:
 
@@ -40,7 +40,7 @@ Compared with other remapping tools, AnyKey has two fundamental advantages roote
 
 ## 2. Installation
 
-> ⚠️ **Important limitations — read before installing**: AnyKey's kernel driver **does not carry a Microsoft signing certificate** (Microsoft signing costs are beyond an independent developer's current means — see the note at the top), so it **can only load in Windows Test Signing mode**, and **Test Signing is mutually exclusive with Secure Boot — you must disable Secure Boot in UEFI first**. Once test mode is on, a "Test Mode" watermark stays on the bottom-right of the desktop; some virtualization-based security features (HVCI / Memory Integrity) will block unsigned driver loading — verify your machine's security configuration is compatible before enabling. Proceed only after understanding and accepting these risks.
+> ⚠️ **Important limitations — read before installing**: AnyKey's kernel driver **does not carry a Microsoft signing certificate** (signing is too expensive for now — see the note at the top), so it **can only load in Windows Test Signing mode**, and **Test Signing is mutually exclusive with Secure Boot — you must disable Secure Boot in UEFI first**. Once test mode is on, a "Test Mode" watermark stays on the bottom-right of the desktop; some virtualization-based security features (HVCI / Memory Integrity) will block unsigned driver loading — verify your machine's security configuration is compatible before enabling. Proceed only after understanding and accepting these risks.
 
 Get AnyKey one of two ways: download the release package (zip) from GitHub Releases and extract it anywhere, or clone the repository and build from source. **Except for the kernel driver, all components (GUI configurator, system tray, engine) are standalone executables — no installation needed.**
 
