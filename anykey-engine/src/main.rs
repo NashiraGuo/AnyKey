@@ -37,6 +37,30 @@ macro_rules! log {
     }};
 }
 
+/// 跨进程对齐时间戳：真实墙钟（UTC+8，µs 精度）+ QPC 原始计数。
+/// 与 tools/keylatency 探针输出同一时间基，可逐事件计算「发出 → 系统接收」延迟。
+/// 注意：与管道 DBG 的 [wall.tick%1000.qpc%1000]（引擎相对时基）不同，此为绝对墙钟。
+fn ts_tag() -> String {
+    use std::time::SystemTime;
+    let us = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0);
+    // 当天秒内部分 → HH:MM:SS.mmm.uuu（UTC+8）
+    let day_us = us % 86_400_000_000;           // UTC 当天微秒
+    let cst_us = (day_us + 8 * 3_600_000_000) % 86_400_000_000;
+    let h = cst_us / 3_600_000_000;
+    let m = (cst_us / 60_000_000) % 60;
+    let s = (cst_us / 1_000_000) % 60;
+    let frac = cst_us % 1_000_000;
+    // QPC 原始计数（系统级单调时钟，跨进程可比）
+    let mut qpc: i64 = 0;
+    unsafe {
+        let _ = windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut qpc);
+    }
+    format!("[{:02}:{:02}:{:02}.{:03}.{:03} QPC={}]", h, m, s, frac / 1000, frac % 1000, qpc)
+}
+
 // ── MessageBox helper ──
 #[cfg(windows)]
 fn msgbox(title: &str, msg: &str) {
@@ -413,9 +437,8 @@ fn main() {
                 // ── 纯执行函数：发送单个键盘键 ──
                 fn send_key_event(fd: &FilterDriver, kn_lower: &str, target_dev: u32, is_down: bool, is_tap: bool) {
                     if let Some(sc) = key_name_to_scancode(kn_lower) {
-                        if is_tap { log!("  send(FLT): TAP {} dev={}", kn_lower, target_dev); }
-                        else if is_down { log!("  send(FLT): DN {} dev={}", kn_lower, target_dev); }
-                        else { log!("  send(FLT): UP {} dev={}", kn_lower, target_dev); }
+                        let kind = if is_tap { "TAP" } else if is_down { "DN" } else { "UP" };
+                        log!("  {} send(FLT): {} {} dev={}", ts_tag(), kind, kn_lower, target_dev);
                         let ext = needs_e0(kn_lower);
                         let mut flags: u16 = 0;
                         if ext { flags |= 0x02; }
@@ -434,7 +457,7 @@ fn main() {
                 fn send_mouse_event(fd: &FilterDriver, name: &str, target_dev: u32, is_down: bool) {
                     use anykey_engine::emit::mouse_name_to_flags;
                     if let Some((mflags, is_wheel)) = mouse_name_to_flags(name, is_down) {
-                        log!("  send(FLT): MOUSE {} {} dev={}", if is_down { "DN" } else { "UP" }, name, target_dev);
+                        log!("  {} send(FLT): MOUSE {} {} dev={}", ts_tag(), if is_down { "DN" } else { "UP" }, name, target_dev);
                         let mut mevt = AnyKeyMouseOutputEvent {
                             device_id: target_dev, flags: 0,
                             button_flags: mflags, button_data: 0,
@@ -478,26 +501,34 @@ fn main() {
                         let kn_lower = kn_clean.to_lowercase();
                         if let Some(sc) = key_name_to_scancode(&kn_lower) {
                             let ext = needs_e0(&kn_lower);
-                            log!("  send(SI): {} {} (sc=0x{:02X})", if is_tap{"TAP"}else if is_down{"DN"}else{"UP"}, kn_lower, sc);
-                            send_key_down_sendinput(sc, ext);
-                            if is_tap { send_key_up_sendinput(sc, ext); }
+                            log!("  {} send(SI): {} {} (sc=0x{:02X})", ts_tag(), if is_tap{"TAP"}else if is_down{"DN"}else{"UP"}, kn_lower, sc);
+                            let sent = send_key_down_sendinput(sc, ext);
+                            if sent == 0 {
+                                log!("  {} WARNING: SendInput DN '{}' blocked/failed (returned 0, UIPI or security software)", ts_tag(), kn_lower);
+                            }
+                            if is_tap {
+                                let sent_up = send_key_up_sendinput(sc, ext);
+                                if sent_up == 0 {
+                                    log!("  {} WARNING: SendInput UP '{}' blocked/failed (returned 0, UIPI or security software)", ts_tag(), kn_lower);
+                                }
+                            }
                         } else {
                             log!("  ERROR: unknown key SI '{}' (no scancode)", kn_lower);
                         }
                     }
                     EmitEvent::Text(ref t, _) => {
-                        log!("  text: '{}'", t);
+                        log!("  {} text: '{}'", ts_tag(), t);
                         send_unicode_text(t);
                     }
                     EmitEvent::Run(ref c, _) => {
-                        log!("  run: {}", c);
+                        log!("  {} run: {}", ts_tag(), c);
                         run_shell(c);
                     }
                     EmitEvent::LayerOn(ref l, _) => { log!("  layer ON: {}", l); }
                     EmitEvent::LayerOff(ref l, _) => { log!("  layer OFF: {}", l); }
                     EmitEvent::MouseMove(x, y, ev_dev) => {
                         let target_dev = mouse_target_dev(registry, ev_dev, recent_mouse_dev);
-                        log!("  send(FLT): MouseMove({}, {}) dev={}", x, y, target_dev);
+                        log!("  {} send(FLT): MouseMove({}, {}) dev={}", ts_tag(), x, y, target_dev);
                         let mevt = AnyKeyMouseOutputEvent {
                             device_id: target_dev, flags: 0,
                             button_flags: 0, button_data: 0,
@@ -506,6 +537,15 @@ fn main() {
                         if let Err(e) = fd.send_mouse_output(&mevt) {
                             log!("  send_mouse_output(MouseMove) failed: {}", e);
                         }
+                    }
+                    // ── 通道栅栏【指令，无输出】：睡够前序 FLT 的排空时间，再放行后缀 SI 文本 ──
+                    // 时长由 commit 阶段（决策方）按本执行内积压的 FLT 事件数算出，main 只执行，
+                    // 不含任何启发式。普通打字不产生 Fence，零影响。
+                    // 位置语义：事件序列 = FLT burst → Fence → SI 文本；到此 FLT 已经
+                    // send_output 提交给驱动（IOCTL 非阻塞），sleep 让系统排空它们。
+                    EmitEvent::Fence(ms) => {
+                        log!("  {} FENCE: FLT->SI, sleep {}ms", ts_tag(), ms);
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
                     }
                 }
             }
@@ -623,7 +663,7 @@ fn main() {
             let is_down = (evt.flags & ANYKEY_KEY_BREAK) == 0;
 
             let key_name_flt = input_name(evt.make_code, evt.flags);
-            log!("in: {} {}", if is_down { "DN" } else { "UP" }, key_name_flt);
+            log!("{} in: {} {}", ts_tag(), if is_down { "DN" } else { "UP" }, key_name_flt);
 
             pipeline.current_device = evt.device_id;
             last_active_dev = evt.device_id;

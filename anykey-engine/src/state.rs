@@ -369,6 +369,10 @@ pub enum EmitEvent {
     UpSI(String, u32),
     LayerOn(String, u32),
     LayerOff(String, u32),
+    /// 通道栅栏【指令，不产生输出】：drain 执行到此处休眠 N 毫秒，等前序 FLT 事件被
+    /// 系统排空后再发后续 SI 事件，避免 FLT→SI 方向无背压导致的字符交错。
+    /// 时长由 commit 阶段（决策方）按本执行内积压的 FLT 事件数算出，main 只负责执行。
+    Fence(u64),
 }
 
 // ═══════════════════════════════════════════

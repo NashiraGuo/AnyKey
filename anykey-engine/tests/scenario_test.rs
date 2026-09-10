@@ -65,6 +65,8 @@ fn emit_to_string(ev: &EmitEvent) -> String {
         EmitEvent::TapSI(k, _) => format!("TapSI({})", k),
         EmitEvent::DownSI(k, _) => format!("DownSI({})", k),
         EmitEvent::UpSI(k, _) => format!("UpSI({})", k),
+        // Fence 是执行指令、非可观测输出，已在比对前过滤；此处仅为穷尽性占位。
+        EmitEvent::Fence(ms) => format!("Fence({}ms)", ms),
     }
 }
 
@@ -126,7 +128,12 @@ fn run_scenario(path: &Path) -> Result<(), String> {
         }
     }
 
-    let emit_log = &pipeline.emit_log;
+    // Fence 是【执行指令】而非可观测输出（golden 里不会有对应项），比对前剔除。
+    let emit_log: Vec<&EmitEvent> = pipeline
+        .emit_log
+        .iter()
+        .filter(|e| !matches!(e, EmitEvent::Fence(_)))
+        .collect();
     let expected = &scenario.expect;
 
     // Write debug log to scenarios directory

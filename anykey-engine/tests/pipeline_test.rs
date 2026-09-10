@@ -1044,6 +1044,48 @@ fn test_leader_control_key_routes_to_tapsi() {
 }
 
 #[test]
+fn test_select_fence_between_flt_burst_and_si_suffix() {
+    // {Select N} 的 FLT burst 与后缀 SI 文本之间必须恰好插一条 Fence 指令。
+    // FLT→SI 方向没有队列背压，不隔开则后缀字符会插进还在排空的 FLT 流
+    // （实测 hira@126.com{select 12}123456 → 后缀变 654321）。
+    // Fence 曾两次做错位置（在 commit 里直接 sleep / 在 main 全局计数），本测试锁死
+    // 「作为 emit_log 指令排在 burst 之后、suffix 之前」这一语义与时长公式。
+    let mut s = new_state(test_config());
+    let mut ctx = Context {
+        key: "__leader_out".into(),
+        logical_key: "hira@126.com{Select 12}123456".into(),
+        ..Default::default()
+    };
+    s.send_key(&mut ctx);
+
+    let fence_idx = s.emit_log.iter()
+        .position(|e| matches!(e, EmitEvent::Fence(_)))
+        .expect("leader 的 FLT burst + SI 后缀必须产生一条 Fence");
+    assert_eq!(fence_idx, s.emit_log.len() - 2,
+        "Fence 必须排在 FLT burst 之后、后缀 SI 之前（末尾两个事件是 Fence + suffix SI）");
+
+    // 栅栏前紧邻 FLT burst 的收尾（shift UP，走 Down/Up 通道）
+    assert!(matches!(s.emit_log[fence_idx - 1], EmitEvent::Up(ref k, _) if k == "shift"),
+        "Fence 前一个事件应是 FLT burst 的 shift UP");
+
+    // 时长公式：burst = 4N+2 事件（N=12 → 50），50 × 1.2 + 2 = 62
+    assert!(matches!(s.emit_log[fence_idx], EmitEvent::Fence(62)),
+        "Fence 时长应为积压 FLT 事件数 × 1.2 + 2ms");
+
+    // 栅栏之后只允许 SI 变体（不得再混入 Down/Up 通道）
+    assert!(s.emit_log[fence_idx + 1..].iter().all(|e| matches!(e,
+        EmitEvent::Text(_, _) | EmitEvent::TapSI(_, _) | EmitEvent::DownSI(_, _) | EmitEvent::UpSI(_, _))),
+        "Fence 之后应为纯 SI 输出");
+
+    // 同通道后缀（非 leader + 简单 ASCII → 也走 FLT）不应产生栅栏
+    let mut s2 = new_state(test_config());
+    let mut ctx2 = Context { key: "x".into(), logical_key: "a{Select 3}bc".into(), ..Default::default() };
+    s2.send_key(&mut ctx2);
+    assert!(!s2.emit_log.iter().any(|e| matches!(e, EmitEvent::Fence(_))),
+        "FLT→FLT 同通道切换无需栅栏（不应给所有输出加 fence）");
+}
+
+#[test]
 fn test_leader_per_seq_timeout_max() {
     // 公共超时 1000；两条同前缀序列分别 100 / 500 → 滑动窗口应取候选最大 500。
     // 验证「每条不同超时」由引擎真正生效，且重叠前缀取最大。

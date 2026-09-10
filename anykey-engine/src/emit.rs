@@ -97,7 +97,8 @@ pub fn mouse_name_to_flags(name: &str, is_down: bool) -> Option<(u16, bool)> {
 /// `extended` = true 时附加 KEYEVENTF_EXTENDEDKEY（E0 前缀键：方向键 / End / Home /
 /// Insert / Delete / 右 Ctrl|Alt / Win / 小键盘 Enter|/ / 媒体键 / 音量键 等）。
 /// 注意：wScan 应填「裸」扫描码（不含 0xE0 前缀），E0 用 flag 表达，否则键位错位。
-pub fn send_key_down_sendinput(scancode: u16, extended: bool) {
+/// 返回成功插入的事件数（0 = 被拦截/失败，如 UIPI 或安全软件屏蔽，调用方应告警）。
+pub fn send_key_down_sendinput(scancode: u16, extended: bool) -> u32 {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
     let mut flags = KEYEVENTF_SCANCODE;
     if extended { flags |= KEYEVENTF_EXTENDEDKEY; }
@@ -111,12 +112,12 @@ pub fn send_key_down_sendinput(scancode: u16, extended: bool) {
             time: 0,
             dwExtraInfo: 0,
         };
-        SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+        SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32)
     }
 }
 
 /// Send a key up event via SendInput (scancode mode). 见 `send_key_down_sendinput`。
-pub fn send_key_up_sendinput(scancode: u16, extended: bool) {
+pub fn send_key_up_sendinput(scancode: u16, extended: bool) -> u32 {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
     let mut flags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP;
     if extended { flags |= KEYEVENTF_EXTENDEDKEY; }
@@ -130,6 +131,6 @@ pub fn send_key_up_sendinput(scancode: u16, extended: bool) {
             time: 0,
             dwExtraInfo: 0,
         };
-        SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32);
+        SendInput(1, &mut input, std::mem::size_of::<INPUT>() as i32)
     }
 }

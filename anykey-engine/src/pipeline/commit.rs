@@ -241,6 +241,15 @@ impl PipelineState {
     /// - 文本 / 宏 / 鼠标 / 函数 → emit_text/emit_run/emit_mouse_move 自包含 + 记 emitted（release 仅清不重发）
     /// - {Sleep N} → 前缀立即发（递归走统一路径）、后缀经 SleepTimer 延迟
     pub fn send_key(&mut self, ctx: &mut Context) {
+        // 通道栅栏计数器（2026-09-10）：每次输出执行新建一个 FLT 事件计数，
+        // 子递归（Sleep/Select/Repeat 的前后缀）经 &Cell 共享同一计数。
+        // 普通打字是独立的小执行、早已排空，与本计数无关（这是与全局计数器的
+        // 本质区别：栅栏值 = 本执行内自最近通道切换以来的 FLT 积压，精确无污染）。
+        let flt = std::cell::Cell::new(0u64);
+        self.send_key_inner(ctx, &flt);
+    }
+
+    fn send_key_inner(&mut self, ctx: &mut Context, flt: &std::cell::Cell<u64>) {
         let output = ctx.logical_key.clone();
         let key = ctx.key.clone();
         // 从 key_state 取触发设备的 ID（key_down 入口写入），不依赖 self.current_device
@@ -292,10 +301,10 @@ impl PipelineState {
             let delay: u64 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
             let suffix = caps.get(3).map(|m| m.as_str()).unwrap_or("");
             if !prefix.is_empty() {
-                // 递归发送前缀（走统一路径，含记录）
+                // 递归发送前缀（走统一路径，含记录；FLT 发射计入本执行的栅栏计数）
                 let mut sub = ctx.clone();
                 sub.logical_key = prefix.to_string();
-                self.send_key(&mut sub);
+                self.send_key_inner(&mut sub, flt);
             }
             if !suffix.is_empty() && delay > 0 {
                 self.debug("TIMER", &format!("Schedule SleepTimer key={} delay={}", key, delay));
@@ -318,6 +327,10 @@ impl PipelineState {
         // {Select N} — 向左选中 N 个字符（快捷宏）：{Left N}{shift down}{Right N}{shift up}。
         // 支持前缀和后缀（如 hira@126.com{Select 12} → 先发文本，再选中）。
         // 放在 {KeyName N} 之前，避免 {Select 12} 被当成 12 次 "select" 键。
+        // 按键段统一走 FLT 通道（无 injected 标记，不会被 IME/LL 钩子按合成键吞掉导致
+        // shift 卡死；A/B 实测 FLT 同样零间隔 shift 不卡）。文本前缀/后缀仍走 SI
+        // （unicode 只有 SI 能发）。单一通道边界：文本(SI 整批入队) → 按键(FLT)，
+        // SendInput 返回时文本已入队，FLT 不超车。
         let select_re = regex_lazy(r"(?i)(.*?)\{Select\s+(\d+)\}(.*)");
         if let Some(caps) = select_re.captures(&output) {
             let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -326,22 +339,32 @@ impl PipelineState {
             if !prefix.is_empty() {
                 let mut sub = ctx.clone();
                 sub.logical_key = prefix.to_string();
-                self.send_key(&mut sub);
+                self.send_key_inner(&mut sub, flt);
             }
-            let is_ldr = key.starts_with("__leader_");
             self.debug("SELECT", &format!("Select {} (prefix={:?} suffix={:?})", count, prefix, suffix));
+            // FLT burst 事件数：4N+2（left DN/UP ×N + shift DN + right DN/UP ×N + shift UP）
+            flt.set(flt.get() + (4 * count + 2) as u64);
             for _ in 0..count {
-                if is_ldr { self.emit_tap_si("left"); } else { self.emit_down("left", device_id); self.emit_up("left", device_id); }
+                self.emit_down("left", device_id);
+                self.emit_up("left", device_id);
             }
-            if is_ldr { self.emit_down_si("shift"); } else { self.emit_down("shift", device_id); }
+            self.emit_down("shift", device_id);
             for _ in 0..count {
-                if is_ldr { self.emit_tap_si("right"); } else { self.emit_down("right", device_id); self.emit_up("right", device_id); }
+                self.emit_down("right", device_id);
+                self.emit_up("right", device_id);
             }
-            if is_ldr { self.emit_up_si("shift"); } else { self.emit_up("shift", device_id); }
+            self.emit_up("shift", device_id);
             if !suffix.is_empty() {
+                // 通道栅栏：FLT burst 引擎瞬间发完，但系统以 ~1.0ms/事件被 RIT/LL
+                // 钩子节流排空（实测）；SI 文本无队列背压，会插进还在排空的 FLT 流
+                // → 字符交错（实测 {Select 12}+suffix → 654321）。按本执行内积压的
+                // FLT 事件数精确估算 sleep（1.0 实测 + 20% 余量 + 2ms 固定）。
+                // 后缀实际会走 SI 才需要：leader 恒 SI；非 leader 简单 ASCII 走 FLT，
+                // 同通道无需栅栏（is_simple_text 含 { 的后缀偏保守多睡，方向安全）。
+                self.channel_fence(flt, key.starts_with("__leader_") || !Self::is_simple_text(suffix));
                 let mut sub = ctx.clone();
                 sub.logical_key = suffix.to_string();
-                self.send_key(&mut sub);
+                self.send_key_inner(&mut sub, flt);
             }
             return;
         }
@@ -358,9 +381,14 @@ impl PipelineState {
             if !prefix.is_empty() {
                 let mut sub = ctx.clone();
                 sub.logical_key = prefix.to_string();
-                self.send_key(&mut sub);
+                self.send_key_inner(&mut sub, flt);
             }
             self.debug("REPEAT", &format!("{} x{}", key_name, count));
+            // 非 leader 的重复 tap 走 FLT（鼠标键走鼠标通道不计）：计入栅栏计数；
+            // leader 走 TapSI（SI 同通道）不计。
+            if !key.starts_with("__leader_") && !crate::emit::is_mouse_key_name(key_name) {
+                flt.set(flt.get() + (2 * count) as u64);
+            }
             for _ in 0..count {
                 if key.starts_with("__leader_") {
                     self.emit_tap_si(key_name);  // SendInput 自包含 tap
@@ -370,24 +398,24 @@ impl PipelineState {
                 }
             }
             if !suffix.is_empty() {
+                // 通道栅栏：非 leader 重复 tap（FLT）后接 SI 后缀（大写/中文等）时，
+                // 前缀 FLT + taps 的积压会在 SI 文本发出前精确排空。leader 全 SI 不触发
+                // （pending=0）；后缀为简单 ASCII 时走 FLT 同通道也不触发。
+                self.channel_fence(flt, key.starts_with("__leader_") || !Self::is_simple_text(suffix));
                 let mut sub = ctx.clone();
                 sub.logical_key = suffix.to_string();
-                self.send_key(&mut sub);
+                self.send_key_inner(&mut sub, flt);
             }
             return;  // 自包含，不记 emitted
         }
 
-        // Leader 合成键（__leader_*）：纯单键 → 统一经 SendInput 输出。
-        // - 单字符键（{b}/{1}/{!}…）→ emit_text（unicode 打字），自包含；
-        // - 控制键名（{enter}/{space}/{f1}…）→ emit_tap_si（SendInput 扫描码 tap）。
-        // 放在 {Sleep N} 之后：leader 输出中的 {Sleep 100} 由上层 Sleep 分支处理。
+        // Leader 合成键（__leader_*）：纯单键（{b}/{1}/{enter}/{f1}…）→ SendInput 扫描码 tap。
+        // 自包含、不记 emitted。单字符与控制键名同走扫描码 tap（单字符可尊重修饰键状态
+        // 如 Shift；控制键名含 E0）。放在 {Sleep N} 之后：leader 输出中的 {Sleep 100}
+        // 由上层 Sleep 分支处理。
         if key.starts_with("__leader_") && is_single_key(&output) {
             let raw = strip_slot_suffix(&output[1..output.len() - 1]);
-            if raw.chars().count() == 1 {
-                self.emit_tap_si(&raw);   // 单字符 → 扫描码 tap（尊重修饰键状态如 Shift）
-            } else {
-                self.emit_tap_si(&raw);   // 控制键名 → 扫描码 tap（含 E0）
-            }
+            self.emit_tap_si(&raw);
             return;
         }
 
@@ -480,13 +508,13 @@ impl PipelineState {
             last_end = 0;
             for seg in &segs {
                 if seg.start > last_end {
-                    self.emit_bare_text(&output[last_end..seg.start], use_si);
+                    self.emit_seg_text(&output[last_end..seg.start], use_si, flt);
                 }
                 match seg.action {
                     "down" if use_si => self.emit_down_si(seg.key),
-                    "down" => { self.emit_down(seg.key, device_id); self.set_emitted(seg.key, seg.key.to_string()); }
+                    "down" => { self.emit_down(seg.key, device_id); self.set_emitted(seg.key, seg.key.to_string()); flt.set(flt.get() + 1); }
                     "up" if use_si => self.emit_up_si(seg.key),
-                    "up" => self.emit_up(seg.key, device_id),
+                    "up" => { self.emit_up(seg.key, device_id); flt.set(flt.get() + 1); }
                     "tap" if use_si => {
                         if seg.key.chars().count() == 1 {
                             self.emit_bare_text(seg.key, use_si);
@@ -497,6 +525,7 @@ impl PipelineState {
                     "tap" => {
                         self.emit_down(seg.key, device_id);
                         self.emit_up(seg.key, device_id);
+                        flt.set(flt.get() + 2);
                     }
                     _ => {}
                 }
@@ -504,12 +533,12 @@ impl PipelineState {
             }
             // 剩余文本
             if !segs.is_empty() && last_end < output.len() {
-                self.emit_bare_text(&output[last_end..], use_si);
+                self.emit_seg_text(&output[last_end..], use_si, flt);
             }
 
             // 无任何 {keyname} 模式 → 纯文本
             if segs.is_empty() {
-                self.emit_bare_text(&output, use_si);
+                self.emit_seg_text(&output, use_si, flt);
                 if use_si {
                     // SendInput 文本：走下方 record_emitted 供 leader 漏斗
                 } else {
@@ -660,6 +689,38 @@ impl PipelineState {
     fn is_simple_text(txt: &str) -> bool {
         txt.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()
             || matches!(c, ' ' | '`' | '-' | '=' | '[' | ']' | '\\' | ';' | '\'' | ',' | '.' | '/'))
+    }
+
+    /// 通道栅栏（FLT→SI 切换点专用）：FLT 事件引擎瞬间发完（IOCTL 非阻塞），但系统以
+    /// ~1.0ms/事件被 RIT/LL 钩子节流排空（2026-09-10 keylatency 实测；SI unicode
+    /// ~1.19ms/事件）。SI→FLT 方向有队列背压天然保护（SendInput 队列满→阻塞发射线程），
+    /// FLT→SI 方向无背压，SI 文本会插进还在排空的 FLT 流 → 字符交错（实测 {Select 12}
+    /// + suffix → 654321）。时长 = 本执行内积压 FLT 事件数 × 1.2ms + 2ms，作为 Fence
+    /// 指令推入 emit_log。
+    ///
+    /// ⚠️ 不能在这里 sleep：commit 只做决策、把事件写进 emit_log，真正发射在 main 的
+    /// drain 阶段。在此 sleep 会睡在【所有输出之前】（前缀 FLT burst 还没提交给驱动），
+    /// 白等一场 —— 2026-09-10 实测确认。必须让指令随 emit_log 排到 FLT burst 之后、
+    /// 后缀 SI 之前，由 drain 执行。
+    ///
+    /// `need`=后缀实际会走 SI（leader 恒真 / 非 leader 看后缀是否简单 ASCII）。
+    /// 入队后清零计数——栅栏之后积压视为已排空，本执行内后续 FLT 从零计。
+    fn channel_fence(&mut self, flt: &std::cell::Cell<u64>, need: bool) {
+        let pending = flt.get();
+        if !need || pending == 0 { return; }
+        let ms = pending * 12 / 10 + 2;
+        self.debug("FENCE", &format!("FLT->SI switch, {} pending FLT events, fence {}ms", pending, ms));
+        self.emit_log.push(EmitEvent::Fence(ms));
+        flt.set(0);
+    }
+
+    /// 分段器文本发射：FLT 逐字符路径计入栅栏计数（每字符 down+up = 2 事件），
+    /// SI 路径不计（SI 自身积压由背压保护，且 SI→FLT 不需要栅栏）。
+    fn emit_seg_text(&mut self, text: &str, use_si: bool, flt: &std::cell::Cell<u64>) {
+        if !use_si {
+            flt.set(flt.get() + 2 * text.chars().count() as u64);
+        }
+        self.emit_bare_text(text, use_si);
     }
 
     /// 发送裸文本片段：use_si=true 走 SendInput API；false 走 Down/Up 事件通道。
