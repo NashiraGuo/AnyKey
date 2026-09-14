@@ -8,43 +8,23 @@
 
 > A high-performance key remapping tool for Windows — configure it in a GUI, intercept input at the kernel level, map per device and per app.
 
-AnyKey is a **keyboard & mouse remapping + runtime control + system-level input interception** tool. It hands you full control over how your keyboard and mouse respond. The core engine is written in **Rust** and, through a **custom Windows kernel filter driver (UpperFilter)**, intercepts and re-injects keyboard/mouse input at the system level. All key processing happens locally: **no telemetry, no network reporting**.
+AnyKey hands you full control over how your keyboard and mouse respond. The core engine is written in **Rust** and, through a **custom Windows kernel filter driver (UpperFilter)**, intercepts and re-injects input at the system level. All processing happens locally: **no telemetry, no network reporting**.
 
 ## What makes AnyKey different?
 
-Layers, combos, leader sequences, tap-dance — every remapping tool has those, so listing them up front says very little. What AnyKey actually invests in is the three things below, and you only feel them after using it:
+Layers, combos, leader sequences, tap-dance — every remapping tool has those, so there is no point repeating them. Three things are where the effort actually went:
 
-### 1. A real GUI — no config file to hand-write
+**1. A real GUI — no config file to hand-write.** The device panel lets you rename devices, toggle them individually and give each its own mapping; the app panel switches between "global / configured apps / running processes" from one dropdown; layer editing comes with a **keyboard visualization** where each key's four roles (tap / hold / double-tap / double-hold) are colour-coded in its four corners. Run / pause from the top bar — changes take effect immediately, no engine restart.
 
-Most tools ask you to write a config file yourself: look up the syntax for a change, then restart the engine before it takes effect. AnyKey ships a graphical configurator that puts the whole configuration on screen:
+**2. Built for the scenarios where devices change and windows change.** No device count limit (Interception caps the whole system at 10), with hot-plug and sleep/wake handled as well; every device can carry a complete mapping set of its own and each app can override it again, all inside one pipeline shared by keyboard and mouse — **a layer switched on the keyboard is followed by the mouse immediately**; state stays isolated per device and per app domain, so a key held in the previous window never leaks into the new one.
 
-- **Device panel** — lists the keyboards and mice it has detected; rename them, switch them on or off individually, give each device its own mapping.
-- **App panel** — a single dropdown switches between "global / configured apps / running processes", so different programs can get different mappings.
-- **Visual editing** — Combo / TapDance / Leader tabs, and layer editing comes with a **keyboard visualization**: each key's four roles (tap / hold / double-tap / double-hold) are colour-coded in its four corners, so you can see at a glance where mappings live.
-- **Effective immediately** — run / pause straight from the top bar, no engine restart needed; a key-reference panel turns nine categories of key names into buttons, and any input field opens a larger editor on double-click.
-
-### 2. Built for the scenarios where devices change and windows change
-
-The ideal case is one keyboard and one window. Reality is not: a second keyboard, an external numpad, keyboard and mouse at once, apps switching back and forth, devices unplugged and plugged back in, a laptop lid closed and opened again. Those transitions are exactly where remapping tools drop keys, get them stuck, or apply the wrong mapping. AnyKey handles them at the architectural level:
-
-- **No device count limit** — the popular Interception driver caps the whole system at 10 input devices, after which device #11 simply stops working. AnyKey's own UpperFilter driver removes that cap, and **hot-plug plus sleep/wake come handled as well**.
-- **Device × app two-level mapping** — every device can carry a complete mapping set of its own, and each app can override it again; keyboard and mouse cooperate inside the same processing pipeline, so **a layer switched on the keyboard is followed by the mouse immediately**.
-- **State isolated per domain** — switching device or app domains keeps input state independent, so a key held in the previous window never leaks into the new one.
-- **Fail-safes** — three lines of defence (engine crash, heartbeat loss, main-thread deadlock) plus a kernel-level emergency detach shortcut: the keyboard and mouse are your only input path, so there has to be a way to stop instantly.
-
-### 3. "Hold to switch layer" is tuned for feel
-
-Holding a key to switch layers looks trivial but is hard to get right — most tools only let you bind it to a handful of preset modifier keys, and binding it to a normal letter key misfires almost every time. AnyKey turns it into a general capability with **Defer**:
-
-- letters, symbols and mouse side buttons can **all** act as layer activation keys, with an **independently adjustable hold threshold per key**;
-- keystrokes made during the decision window are **queued**, then replayed in the correct context once the hold / tap decision lands — **no dropped characters, no false triggers**;
-- chained dependencies, such as a layer key inside a layer key, replay correctly too.
+**3. "Hold to switch layer" is tuned for feel.** Letters, symbols and mouse side buttons can **all** act as layer activation keys, with an **independently adjustable hold threshold per key**; keystrokes made during the decision window are queued and replayed in the correct context once the hold / tap decision lands — **no dropped characters, no false triggers**.
 
 ---
 
-## About Test Mode — the honest truth
+## About Test Mode
 
-Loading a driver the normal way requires Microsoft signing (an EV code-signing certificate plus WHQL certification). **It's just too expensive, and I'm not paying for it right now** — for a solo developer that money buys nothing users can feel. So this version runs in **Windows Test Signing mode**, with a permanent "Test Mode" watermark in the corner of your desktop. If the project ever earns its own signing, the watermark goes away (see the roadmap). If that bothers you, read the [full installation notes](#2-installation) before deciding whether to install.
+Loading a driver the normal way requires Microsoft signing (an EV certificate plus WHQL certification). **It's too expensive, and I'm not paying for it right now.** So this version runs in **Windows Test Signing mode**, with a permanent watermark in the corner of your desktop; if the project ever earns its own signing, the watermark goes away (see the roadmap). If that bothers you, read the [full installation notes](#2-installation) before deciding.
 
 ---
 
