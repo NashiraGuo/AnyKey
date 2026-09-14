@@ -1,0 +1,39 @@
+# ── 行尾策略（单一真值）──
+#
+# 默认：仓库内统一存 LF（* text=auto），检出时按下面的规则转换。
+#
+# 为什么必须显式声明：GitHub 的 "Download ZIP" 与 Release 的源码包由
+# git archive 生成，**不走 core.autocrlf**（那是本地检出的设置）。
+# 只有写在 .gitattributes 里的 eol 属性才会应用到归档产物上，
+# 否则从 GitHub 下源码的人拿到的 .bat 是 LF —— cmd.exe 会把
+# 后续行的首字符当成命令执行，属于静默且严重的故障。
+#
+# 已知不覆盖的路径：raw.githubusercontent.com 的单文件下载直接吐 blob，
+# 不做任何转换，仍是 LF。属于平台限制，构建源码请走 clone 或 ZIP。
+
+* text=auto
+
+# ── Windows 专用文本：强制 CRLF ──
+# .bat/.cmd：cmd.exe 的解析器对 LF 不安全，必须 CRLF
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+# .inf：Windows 驱动安装程序规范的换行是 CRLF
+*.inf       text eol=crlf
+# .ps1：PowerShell 两种换行都能解析，保持 LF 即可，此处显式声明意图
+*.ps1       text
+
+# ── 二进制：禁止任何转换，避免损坏 ──
+*.sys       binary
+*.cer       binary
+*.ico       binary
+*.exe       binary
+*.dll       binary
+*.pdb       binary
+*.lib       binary
+*.obj       binary
+*.zip       binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.psd       binary
