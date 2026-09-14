@@ -1,23 +1,50 @@
-# AnyKey
+<p align="center">
+  <img src="assets/icon.png" alt="AnyKey" width="128">
+</p>
 
-**简体中文** | English
+<h1 align="center">AnyKey</h1>
 
-> A high-performance key remapping tool for Windows — combos, tap-dance, layers, leader sequences, deferred decisions, and kernel-level input interception.
+<p align="center"><a href="README.md">简体中文</a> | <b>English</b></p>
+
+> A high-performance key remapping tool for Windows — configure it in a GUI, intercept input at the kernel level, map per device and per app.
 
 AnyKey is a **keyboard & mouse remapping + runtime control + system-level input interception** tool. It hands you full control over how your keyboard and mouse respond. The core engine is written in **Rust** and, through a **custom Windows kernel filter driver (UpperFilter)**, intercepts and re-injects keyboard/mouse input at the system level. All key processing happens locally: **no telemetry, no network reporting**.
 
-### Why a custom kernel driver? — fixing Interception's device limit
+## What makes AnyKey different?
 
-The popular Interception driver has a hard flaw: **10 input devices max for the whole system**. A second keyboard, a macro pad, a few virtual devices — and device #11 just stops working. AnyKey's own UpperFilter driver kills that limit — hook up as many keyboards and mice as you want, and hot-plug plus sleep/wake come fixed for free.
+Layers, combos, leader sequences, tap-dance — every remapping tool has those, so listing them up front says very little. What AnyKey actually invests in is the three things below, and you only feel them after using it:
 
-### About Test Mode — the honest truth
+### 1. A real GUI — no config file to hand-write
+
+Most tools ask you to write a config file yourself: look up the syntax for a change, then restart the engine before it takes effect. AnyKey ships a graphical configurator that puts the whole configuration on screen:
+
+- **Device panel** — lists the keyboards and mice it has detected; rename them, switch them on or off individually, give each device its own mapping.
+- **App panel** — a single dropdown switches between "global / configured apps / running processes", so different programs can get different mappings.
+- **Visual editing** — Combo / TapDance / Leader tabs, and layer editing comes with a **keyboard visualization**: each key's four roles (tap / hold / double-tap / double-hold) are colour-coded in its four corners, so you can see at a glance where mappings live.
+- **Effective immediately** — run / pause straight from the top bar, no engine restart needed; a key-reference panel turns nine categories of key names into buttons, and any input field opens a larger editor on double-click.
+
+### 2. Built for the scenarios where devices change and windows change
+
+The ideal case is one keyboard and one window. Reality is not: a second keyboard, an external numpad, keyboard and mouse at once, apps switching back and forth, devices unplugged and plugged back in, a laptop lid closed and opened again. Those transitions are exactly where remapping tools drop keys, get them stuck, or apply the wrong mapping. AnyKey handles them at the architectural level:
+
+- **No device count limit** — the popular Interception driver caps the whole system at 10 input devices, after which device #11 simply stops working. AnyKey's own UpperFilter driver removes that cap, and **hot-plug plus sleep/wake come handled as well**.
+- **Device × app two-level mapping** — every device can carry a complete mapping set of its own, and each app can override it again; keyboard and mouse cooperate inside the same processing pipeline, so **a layer switched on the keyboard is followed by the mouse immediately**.
+- **State isolated per domain** — switching device or app domains keeps input state independent, so a key held in the previous window never leaks into the new one.
+- **Fail-safes** — three lines of defence (engine crash, heartbeat loss, main-thread deadlock) plus a kernel-level emergency detach shortcut: the keyboard and mouse are your only input path, so there has to be a way to stop instantly.
+
+### 3. "Hold to switch layer" is tuned for feel
+
+Holding a key to switch layers looks trivial but is hard to get right — most tools only let you bind it to a handful of preset modifier keys, and binding it to a normal letter key misfires almost every time. AnyKey turns it into a general capability with **Defer**:
+
+- letters, symbols and mouse side buttons can **all** act as layer activation keys, with an **independently adjustable hold threshold per key**;
+- keystrokes made during the decision window are **queued**, then replayed in the correct context once the hold / tap decision lands — **no dropped characters, no false triggers**;
+- chained dependencies, such as a layer key inside a layer key, replay correctly too.
+
+---
+
+## About Test Mode — the honest truth
 
 Loading a driver the normal way requires Microsoft signing (an EV code-signing certificate plus WHQL certification). **It's just too expensive, and I'm not paying for it right now** — for a solo developer that money buys nothing users can feel. So this version runs in **Windows Test Signing mode**, with a permanent "Test Mode" watermark in the corner of your desktop. If the project ever earns its own signing, the watermark goes away (see the roadmap). If that bothers you, read the [full installation notes](#2-installation) before deciding whether to install.
-
-Compared with other remapping tools, AnyKey has two fundamental advantages rooted in its low-level architecture:
-
-1. **Defer — any key can be a "hold-to-layer" key.** Most tools can only bind "hold to switch layer" to a handful of preset modifier keys; binding it to a normal letter key almost always causes accidental triggers. AnyKey's Defer system lets letters, symbols, and mouse side keys all act as layer activation keys, with an independently adjustable hold threshold per key. Keystrokes pressed during the decision window are queued and replayed in the correct context after the decision — no dropped characters, no false triggers.
-2. **Multi-device synergy / independent mappings — more than one keyboard.** Every device can have its own set of mappings; keyboard and mouse cooperate inside the same processing pipeline — a layer switched on the keyboard is immediately followed by the mouse. Using an external numpad as a macro pad, or driving both keyboard and mouse with both hands, is natively supported.
 
 ---
 
