@@ -1,0 +1,69 @@
+; AnyKey Filter Driver - Mouse Device INF
+; Matches common mouse hardware IDs. On install, PnP adds anykey_flt
+; as a device UpperFilter (between mouclass and port driver).
+; Same driver binary (anykey_flt.sys) as the keyboard INF.
+; Auto-applies to new mice matching these IDs = hotplug support.
+;
+; Install: right-click anykey_flt_mouse.inf -> Install, then reboot.
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Mouse
+ClassGuid   = {4D36E96F-E325-11CE-BFC1-08002BE10318}
+Provider    = %AnyKey%
+DriverVer   = 07/22/2026,0.2.0.0
+; CatalogFile omitted - test signing mode doesn't require a catalog
+
+[Manufacturer]
+%AnyKey% = AnyKeyMfg,NTamd64
+
+[AnyKeyMfg.NTamd64]
+; PS/2 compatible mouse
+%AnyKeyFltMou.Desc% = AnyKeyFltMou_Inst, *PNP0F03
+%AnyKeyFltMou.Desc% = AnyKeyFltMou_Inst, *PNP0F13
+; HID-compliant mouse (generic — matches most USB/Bluetooth mice)
+%AnyKeyFltMou.Desc% = AnyKeyFltMou_Inst, HID_DEVICE_SYSTEM_MOUSE
+; Hyper-V VMBUS mouse (Basic Session)
+%AnyKeyFltMou.Desc% = AnyKeyFltMou_Inst, VMBUS\{F912AD6D-2B17-48EA-BD65-F927A61C7684}
+; RDP Enhanced Session mouse
+%AnyKeyFltMou.Desc% = AnyKeyFltMou_Inst, TS_INPT\TS_MOU
+
+[AnyKeyFltMou_Inst]
+CopyFiles = AnyKeyFltMou_CopyFiles
+
+[AnyKeyFltMou_Inst.NT]
+CopyFiles = AnyKeyFltMou_CopyFiles
+
+[AnyKeyFltMou_Inst.NT.Services]
+AddService = anykey_flt, 0x00000002, AnyKeyFltMou_Service  ; SPSVCINST_ASSOCSERVICE
+
+[AnyKeyFltMou_Inst.HW]
+AddReg = AnyKeyFltMou_HW_AddReg
+
+[AnyKeyFltMou_HW_AddReg]
+; HKR = device hardware key (Enum\<InstanceId>)
+HKR,,"UpperFilters",0x00010000,"anykey_flt"
+
+[AnyKeyFltMou_Service]
+DisplayName   = %AnyKeyFltMou.Desc%
+ServiceType   = 1          ; SERVICE_KERNEL_DRIVER
+StartType     = 3          ; SERVICE_DEMAND_START
+ErrorControl  = 0          ; SERVICE_ERROR_IGNORE
+ServiceBinary = %12%\anykey_flt.sys
+
+[AnyKeyFltMou_CopyFiles]
+anykey_flt.sys
+
+[SourceDisksNames]
+1 = %DiskId%,,,
+
+[SourceDisksFiles]
+anykey_flt.sys = 1
+
+[DestinationDirs]
+AnyKeyFltMou_CopyFiles = 12    ; %SystemRoot%\System32\drivers
+
+[Strings]
+AnyKey          = "AnyKey"
+AnyKeyFltMou.Desc  = "AnyKey Filter Driver (Mouse)"
+DiskId          = "AnyKey Filter Driver Installation Disk"

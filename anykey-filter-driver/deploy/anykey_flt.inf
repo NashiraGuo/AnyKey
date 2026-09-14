@@ -1,0 +1,67 @@
+; AnyKey Filter Driver - Device INF v0.2
+; Matches keyboard hardware IDs. On install, PnP adds anykey_flt
+; as a device UpperFilter (between kbdclass and port driver).
+; Mouse devices are handled by anykey_flt_mouse.inf.
+; Auto-applies to new keyboards matching these IDs = hotplug support.
+;
+; Install: right-click anykey_flt.inf -> Install, then reboot.
+;          Admin elevation is automatic via Windows UAC prompt.
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Keyboard
+ClassGuid   = {4D36E96B-E325-11CE-BFC1-08002BE10318}
+Provider    = %AnyKey%
+DriverVer   = 07/27/2026,0.2.1.0
+; CatalogFile omitted - test signing mode doesn't require a catalog
+
+[Manufacturer]
+%AnyKey% = AnyKeyMfg,NTamd64
+
+[AnyKeyMfg.NTamd64]
+; Generic HID keyboard (USB/Bluetooth — matches most keyboards)
+%AnyKeyFlt.Desc% = AnyKeyFlt_Inst, HID_DEVICE_SYSTEM_KEYBOARD
+; Hyper-V VMBUS keyboard (Basic Session)
+%AnyKeyFlt.Desc% = AnyKeyFlt_Inst, VMBUS\{F912AD6D-2B17-48EA-BD65-F927A61C7684}
+; RDP Enhanced Session keyboard
+%AnyKeyFlt.Desc% = AnyKeyFlt_Inst, TS_INPT\TS_KBD
+
+[AnyKeyFlt_Inst]
+CopyFiles = AnyKeyFlt_CopyFiles
+
+[AnyKeyFlt_Inst.NT]
+CopyFiles = AnyKeyFlt_CopyFiles
+
+[AnyKeyFlt_Inst.NT.Services]
+AddService = anykey_flt, 0x00000002, AnyKeyFlt_Service  ; SPSVCINST_ASSOCSERVICE
+
+[AnyKeyFlt_Inst.HW]
+AddReg = AnyKeyFlt_HW_AddReg
+
+[AnyKeyFlt_HW_AddReg]
+; HKR = device hardware key (Enum\<InstanceId>)
+HKR,,"UpperFilters",0x00010000,"anykey_flt"
+
+[AnyKeyFlt_Service]
+DisplayName   = %AnyKeyFlt.Desc%
+ServiceType   = 1          ; SERVICE_KERNEL_DRIVER
+StartType     = 3          ; SERVICE_DEMAND_START
+ErrorControl  = 0          ; SERVICE_ERROR_IGNORE
+ServiceBinary = %12%\anykey_flt.sys
+
+[AnyKeyFlt_CopyFiles]
+anykey_flt.sys
+
+[SourceDisksNames]
+1 = %DiskId%,,,
+
+[SourceDisksFiles]
+anykey_flt.sys = 1
+
+[DestinationDirs]
+AnyKeyFlt_CopyFiles = 12    ; %SystemRoot%\System32\drivers
+
+[Strings]
+AnyKey          = "AnyKey"
+AnyKeyFlt.Desc  = "AnyKey Filter Driver"
+DiskId          = "AnyKey Filter Driver Installation Disk"
