@@ -1,4 +1,4 @@
-; AnyKey Filter Driver - Device INF v0.2
+; AnyKey Filter Driver - Device INF v0.4
 ; Matches keyboard hardware IDs. On install, PnP adds anykey_flt
 ; as a device UpperFilter (between kbdclass and port driver).
 ; Mouse devices are handled by anykey_flt_mouse.inf.
@@ -12,7 +12,9 @@ Signature   = "$WINDOWS NT$"
 Class       = Keyboard
 ClassGuid   = {4D36E96B-E325-11CE-BFC1-08002BE10318}
 Provider    = %AnyKey%
-DriverVer   = 07/27/2026,0.2.1.0
+; DriverVer must match ANYKEY_DRIVER_VERSION in sys/public.h (0x000N0000 == v0.N).
+; Both INFs describe the SAME anykey_flt.sys, so they must carry an identical value.
+DriverVer   = 09/10/2026,0.4.0.0
 ; CatalogFile omitted - test signing mode doesn't require a catalog
 
 [Manufacturer]
