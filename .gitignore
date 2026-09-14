@@ -32,8 +32,8 @@ anykey_engine.log
 anykey-filter-driver/Release/
 anykey-filter-driver/bin/
 anykey-filter-driver/*.i
-# deploy/ 里的 .sys（build_driver.ps1 编译产物）与 .cer（build_driver_release.py 导出）
-# 是构建产物；.inf 是手写源码（无任何脚本生成），与安装脚本同等必须入库
+# deploy/ 里的 .sys（build_driver.bat 编译产物）与 .cer（build_driver_release.py 按
+# 证书指纹导出）是构建产物；.inf 是手写源码（无任何脚本生成），与安装脚本同等必须入库
 anykey-filter-driver/deploy/*
 !anykey-filter-driver/deploy/*.inf
 !anykey-filter-driver/deploy/Install_AnyKey_Filter.bat

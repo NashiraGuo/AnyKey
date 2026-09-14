@@ -148,9 +148,9 @@ pipeline.rs            主干调度 + Phase0-7/Up1-8+UpLeader wrappers + 共享�
 
 | 文件/目录 | 职责 |
 |-----------|------|
-| `build_driver.bat` / `build_driver.ps1` | WDK 编译 + 测试签名 |
+| `build_driver.bat` | WDK 编译 + 测试签名。WKROOT / WDK / KMDF / VS / 证书**全部自动探测**，可用 `WKROOT`、`ANYKEY_WDK_VERSION`、`ANYKEY_KMDF_VERSION`、`ANYKEY_VCVARS`、`ANYKEY_SIGN_THUMBPRINT` 覆盖；无证书时自动创建 `CN=AnyKey Test Driver`。退出码 0=成功 / 1=失败 / 2=编译成功但签名失败 |
 | `deploy/` | 发行目录：`Install_AnyKey_Filter.bat`（一键安装）/ `Uninstall_AnyKey_Filter.bat` + `_install_anykey_device.ps1` / `_uninstall.ps1`（实际安装逻辑）+ `anykey_flt.inf`（Keyboard）/ `anykey_flt_mouse.inf`（Mouse）+ `anykey_flt.sys` + `anykey_flt.cer` |
-| `bin/`, `Release/`, `build.log` | 本地编译产物与日志（不入库） |
+| `bin/`, `Release/`, `build.log`, `BIN\X64\RELEASE\signing_thumbprint.txt` | 本地编译产物与日志（不入库）。后者的指纹由 `build_driver_release.py` 读取，用于导出 `.cer` |
 
 > INF 分两份：`anykey_flt.inf`（Keyboard class）+ `anykey_flt_mouse.inf`（Mouse class），同一 `.sys` 多引用。
 
@@ -163,7 +163,7 @@ pipeline.rs            主干调度 + Phase0-7/Up1-8+UpLeader wrappers + 共享�
 | `assets/help.md`, `icon.ico`, `icon.png` | 帮助文档 + 托盘/窗口图标 |
 | `build/build.bat` | 一键七步总控：驱动→引擎→GUI→托盘→组装→签名→release |
 | `build/anykey.spec` | PyInstaller 打包规范（GUI → exe） |
-| `build/build_driver_release.py` | 驱动构建包装（编译+签名+原子部署到 `deploy/`） |
+| `build/build_driver_release.py` | 驱动构建包装（编译+签名+原子部署到 `deploy/`）；证书指纹从 `BIN\X64\RELEASE\signing_thumbprint.txt` 读取，不在 Python 侧另存一份 |
 | `build/build_engine_release.py` / `build_engine_release.bat` | Rust 引擎 release 构建 |
 | `build/build_tray_release.py` | Rust 托盘 release 构建 |
 | `build/build_release_package.py` | 发行包组装（`release\` 标准目录）+ `--zip <版本>` 压缩 |
