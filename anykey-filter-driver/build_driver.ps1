@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$proj = 'c:\Users\proje\WorkBuddy\20260419144520\AnyKey\anykey-filter-driver'
+$proj = $PSScriptRoot
 Set-Location $proj
 $SYS = Join-Path $proj 'sys'
 $WK  = 'C:\Program Files (x86)\Windows Kits\10'

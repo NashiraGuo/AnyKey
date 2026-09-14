@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-Set-Location "c:\Users\proje\WorkBuddy\20260419144520\AnyKey\anykey-engine"
+Set-Location $PSScriptRoot
 
 # Kill stale cargo processes
 Get-Process -Name cargo,rustc -ErrorAction SilentlyContinue | Stop-Process -Force
