@@ -384,12 +384,29 @@ cargo build --release          # output: target/release/anykey-engine.exe
 cargo test                     # unit tests + scenario tests
 ```
 
-### Kernel driver (needs VS2022 + WDK 10.0.28000.0)
+### Kernel driver (needs VS2022 + WDK; toolchain is auto-detected)
 
 ```bash
 cd anykey-filter-driver
 build_driver.bat               # WDK build + test signing; output at BIN\X64\RELEASE\ANYKEY_FLT.SYS
 ```
+
+The Windows Kits root, WDK/KMDF versions, `vcvars64.bat` and the signing certificate are all
+**auto-detected** — no script edits needed. The signing certificate is what external builders
+usually trip over; override it (or anything else) with an environment variable:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `ANYKEY_SIGN_THUMBPRINT` | Signing certificate thumbprint | the author's test cert if present, otherwise a test cert `CN=AnyKey Test Driver` is **created automatically** (valid 10 years) |
+| `ANYKEY_WDK_VERSION` | WDK version, e.g. `10.0.26100.0` | `10.0.28000.0` if installed, otherwise the newest `10.0.*` |
+| `ANYKEY_KMDF_VERSION` | KMDF version, e.g. `1.15` | `1.15` if installed, otherwise the newest |
+| `ANYKEY_VCVARS` | Full path to `vcvars64.bat` | located via `vswhere`, then well-known install paths |
+| `WKROOT` | Windows Kits 10 root | auto-detected |
+
+> An auto-created test certificate is self-signed and not in a trusted root store. The driver still
+> loads in test signing mode (test signing does not require the chain to come from a trusted root);
+> should loading fail, import `deploy\anykey_flt.cer` into "Trusted Root Certification Authorities"
+> and retry.
 
 Or via the unified entry (build + test sign + deploy into the `deploy\` release dir: `anykey_flt.sys` + `anykey_flt.cer`) — also step 1 of `build.bat`:
 

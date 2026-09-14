@@ -381,12 +381,25 @@ cargo build --release          # 产物 target/release/anykey-engine.exe
 cargo test                     # 单元测试 + 场景测试
 ```
 
-### 内核驱动（需 VS2022 + WDK 10.0.28000.0）
+### 内核驱动（需 VS2022 + WDK，工具链自动探测）
 
 ```bash
 cd anykey-filter-driver
 build_driver.bat               # WDK 编译 + 测试签名，产物在 BIN\X64\RELEASE\ANYKEY_FLT.SYS
 ```
+
+Windows Kits 根目录、WDK/KMDF 版本、`vcvars64.bat` 与签名证书**全部自动探测**，脚本无需改动。
+外部构建者最常撞到的是签名证书，需要时用环境变量覆盖即可：
+
+| 环境变量 | 用途 | 默认行为 |
+|---|---|---|
+| `ANYKEY_SIGN_THUMBPRINT` | 签名证书指纹 | 作者测试证书若存在则直接用；否则**自动创建** `CN=AnyKey Test Driver`（10 年有效期） |
+| `ANYKEY_WDK_VERSION` | 指定 WDK 版本（如 `10.0.26100.0`） | 优先 `10.0.28000.0`，不存在则取最新的 `10.0.*` |
+| `ANYKEY_KMDF_VERSION` | 指定 KMDF 版本（如 `1.15`） | 优先 `1.15`，不存在则取最新 |
+| `ANYKEY_VCVARS` | `vcvars64.bat` 全路径 | 先用 `vswhere` 探测，再回退常见安装路径 |
+| `WKROOT` | Windows Kits 10 根目录 | 自动探测 |
+
+> 自动创建的测试证书是自签名的，不在受信任根中。测试模式下驱动仍可加载（test signing 不要求证书链源自受信任根）；万一加载失败，把 `deploy\anykey_flt.cer` 导入「受信任的根证书颁发机构」后重试。
 
 或经统一入口一步到位（编译 + 测试签名 + 部署到 `deploy\` 发行目录：`anykey_flt.sys` + `anykey_flt.cer`）——这也是 `build.bat` 的第 1 步：
 
