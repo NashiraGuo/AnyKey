@@ -411,10 +411,13 @@ python build_driver_release.py
 ### 发布包（GUI + 托盘 + 引擎 + 驱动分发）
 
 ```bash
+pip install pyinstaller                       # GUI 打包用；requirements.txt 只是运行依赖，不含打包工具
 cd build
 build.bat                                     # 一键构建全部，末步自动组装 release\ 标准目录
 python build_release_package.py --zip 1.0.0   # 将 release\ 压缩为 AnyKey_v1.0.0.zip（GitHub Release 附件）
 ```
+
+`build.bat` 第 4 步（GUI → exe）调用 PyInstaller，缺它会在这一步报 `No module named PyInstaller`。
 
 `build.bat` 七步流程：内核驱动（cl/link + 测试签名 → `deploy\`）→ Rust 引擎 → GUI（PyInstaller）→ Rust 托盘 → 组装 `dist\AnyKey\` → 代码签名（有证书时）→ 组装 `release\`（`anykey\` + `anykeyFilterDriver\` + `安装驱动.bat`）。
 

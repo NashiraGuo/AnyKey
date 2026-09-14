@@ -418,10 +418,13 @@ python build_driver_release.py
 ### Release package (GUI + tray + engine + driver distribution)
 
 ```bash
+pip install pyinstaller                       # needed to package the GUI; requirements.txt covers runtime deps only
 cd build
 build.bat                                     # build everything; final step assembles the release\ standard layout
 python build_release_package.py --zip 1.0.0   # zips release\ into AnyKey_v1.0.0.zip (GitHub Release asset)
 ```
+
+Step 4 of `build.bat` (GUI → exe) invokes PyInstaller; without it that step fails with `No module named PyInstaller`.
 
 `build.bat` seven steps: kernel driver (cl/link + test signing → `deploy\`) → Rust engine → GUI (PyInstaller) → Rust tray → assemble `dist\AnyKey\` → code signing (when a cert is present) → assemble `release\` (`anykey\` + `anykeyFilterDriver\` + `安装驱动.bat`).
 
