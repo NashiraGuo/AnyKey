@@ -12,11 +12,11 @@ AnyKey hands you full control over how your keyboard and mouse respond. The core
 
 ## What makes AnyKey different?
 
-Layers, combos, leader sequences, tap-dance — every remapping tool has those, so there is no point repeating them. Three things are where the effort actually went:
+Layers, combos, leader sequences, tap-dance — those are table stakes for any remapping tool, so there is no point repeating them. The differences are three:
 
 **1. A real GUI — no config file to hand-write.** The device panel lets you rename devices, toggle them individually and give each its own mapping; the app panel switches between "global / configured apps / running processes" from one dropdown; layer editing comes with a **keyboard visualization** where each key's four roles (tap / hold / double-tap / double-hold) are colour-coded in its four corners. Run / pause from the top bar — changes take effect immediately, no engine restart.
 
-**2. Built for the scenarios where devices change and windows change.** No device count limit (Interception caps the whole system at 10), with hot-plug and sleep/wake handled as well; every device can carry a complete mapping set of its own and each app can override it again, all inside one pipeline shared by keyboard and mouse — **a layer switched on the keyboard is followed by the mouse immediately**; state stays isolated per device and per app domain, so a key held in the previous window never leaks into the new one.
+**2. Multi-device, multi-app support.** The custom UpperFilter driver has no Interception-style system-wide cap of 10 devices, and hot-plug and sleep/wake just work; every device can carry a complete mapping set of its own and each app can override it again; keyboard and mouse share one pipeline — **a layer switched on the keyboard is followed by the mouse immediately**; device and app domains keep their state separate, so switching between them causes no interference.
 
 **3. "Hold to switch layer" is tuned for feel.** Letters, symbols and mouse side buttons can **all** act as layer activation keys, with an **independently adjustable hold threshold per key**; keystrokes made during the decision window are queued and replayed in the correct context once the hold / tap decision lands — **no dropped characters, no false triggers**.
 
