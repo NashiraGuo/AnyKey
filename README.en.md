@@ -14,17 +14,17 @@ AnyKey hands you full control over how your keyboard and mouse respond. The core
 
 Layers, combos, leader sequences, tap-dance — those are table stakes for any remapping tool, so there is no point repeating them. The differences are three:
 
-**1. A real GUI — no config file to hand-write.** The device panel lets you rename devices, toggle them individually and give each its own mapping; the app panel switches between "global / configured apps / running processes" from one dropdown; layer editing comes with a **keyboard visualization** where each key's four roles (tap / hold / double-tap / double-hold) are colour-coded in its four corners. Run / pause from the top bar — changes take effect immediately, no engine restart.
+**1. A real GUI — no config file to hand-write.** A full graphical interface for setting keys up in a convenient, intuitive way, sparing you the learning curve of code-style config files. The program saves its configuration as a standard JSON file, so if you'd rather not use the GUI, you can also write the JSON by hand.
 
-**2. Multi-device, multi-app support.** The custom UpperFilter driver has no Interception-style system-wide cap of 10 devices, and hot-plug and sleep/wake just work; every device can carry a complete mapping set of its own and each app can override it again; keyboard and mouse share one pipeline — **a layer switched on the keyboard is followed by the mouse immediately**; device and app domains keep their state separate, so switching between them causes no interference.
+**2. Multi-device, multi-app support.** Every device can have its own distinct mapping for every app — perfect for macro keyboards, coordinating shortcuts across software, and similar scenarios. Hot-plugging and sleep/wake are specifically optimized to keep the connection stable.
 
-**3. "Hold to switch layer" is tuned for feel.** Letters, symbols and mouse side buttons can **all** act as layer activation keys, with an **independently adjustable hold threshold per key**; keystrokes made during the decision window are queued and replayed in the correct context once the hold / tap decision lands — **no dropped characters, no false triggers**.
+**3. "Hold to switch layer" is tuned for feel.** Any key can work seamlessly in held roles — layer switches, modifiers, and the like. A carefully engineered semantic deferred-resolution system guarantees that no matter how a key is configured, every input lands without a false trigger.
 
 ---
 
 ## About Test Mode
 
-Loading a driver the normal way requires Microsoft signing (an EV certificate plus WHQL certification). **It's too expensive, and I'm not paying for it right now.** So this version runs in **Windows Test Signing mode**, with a permanent watermark in the corner of your desktop; if the project ever earns its own signing, the watermark goes away (see the roadmap). If that bothers you, read the [full installation notes](#2-installation) before deciding.
+Loading a driver the normal way requires Microsoft signing (an EV certificate plus WHQL certification). **It's too expensive, and I'm not paying for it right now.** So this version runs in **Windows Test Signing mode**, with a permanent watermark in the corner of your desktop; I'll look into proper signing when there's a real need for it. If that bothers you, read the [full installation notes](#2-installation) before deciding.
 
 ---
 
@@ -63,20 +63,28 @@ Three installation steps:
 
 1. **Disable Secure Boot** (full steps below):
 
-   **Option A: enter UEFI setup from Windows**
-   - Windows 11: **Settings → System → Recovery → Advanced startup → Restart now**
-   - Windows 10: **Settings → Update & Security → Recovery → Advanced startup → Restart now**
+   > First check whether you need this step at all: run `msinfo32` and look at "System Summary → **BIOS Mode**".
+   > **UEFI** → disable Secure Boot as described below. **Legacy** → the machine boots the old BIOS way and
+   > has no Secure Boot option at all; `bcdedit` will work right away, so **skip this step**.
+
+   **Option A: enter UEFI setup from Windows** (the two routes below lead to the same menu, pick either)
+   - Quickest: open the **Start menu → Power**, then **hold Shift and click "Restart"** — the PC boots straight into the blue recovery menu
+   - Or via Settings: Windows 11 **Settings → System → Recovery → Advanced startup → Restart now**; Windows 10 **Settings → Update & Security → Recovery → Advanced startup → Restart now**
    - After rebooting into the blue recovery menu: **Troubleshoot → Advanced options → UEFI Firmware Settings → Restart**; the PC boots straight into BIOS/UEFI
    - Under the **Security / Boot / Authentication** tab (varies by board vendor) find **Secure Boot** and set it to **Disabled**
    - Press **F10** (Save & Exit) to save and reboot
 
-   **Option B: press the BIOS key at power-on**: repeatedly press the board's hotkey while the POST screen shows — usually **Del** on desktops, **F2** on laptops (ThinkPads: Enter then F1). Then disable Secure Boot as above and save.
+   **Option B: press the BIOS key at power-on**: prefer clicking "**Restart**" in Windows rather than shutting down and powering on again — on machines with Fast Startup enabled, a shutdown is not a full cold boot and the BIOS hotkey may not respond. Repeatedly press the board's hotkey while the POST screen shows — usually **Del** on desktops, **F2** on laptops. Then disable Secure Boot as above and save.
 
    **Verify**: back in Windows, run `msinfo32` — "System Summary → Secure Boot State" should read **Off**.
 
    **Notes**:
    - If **BitLocker** is enabled you may be asked for the 48-digit recovery key when disabling Secure Boot — look it up beforehand in your [Microsoft account](https://account.microsoft.com/devices/recoverykey) or via `manage-bde -protectors -get C:`
-   - If the Secure Boot option is grayed out: disable Fast Boot, load factory defaults, or update the BIOS first
+   - If the Secure Boot option is **grayed out**, troubleshoot in this order (most common first):
+     ① Set a BIOS administrator password first — under Security look for **Supervisor / Administrator Password** (very common on brand-name laptops), save, reboot, and re-enter BIOS;
+     ② The BIOS is in **CSM/Legacy compatibility mode** — disable CSM (only safe if Windows was installed in UEFI/GPT mode, otherwise it won't boot);
+     ③ Secure Boot keys are missing (Key Management shows Setup Mode / Unloaded) — run **Install/Restore Factory Keys**;
+     ④ Load Factory Defaults or update the BIOS and try again
    - BIOS menus vary a lot between vendors — consult your motherboard/laptop manual if you can't find it
 
 2. **Run the driver install script**: double-click **`安装驱动.bat`** at the root of the extracted package (or run `anykeyFilterDriver/Install_AnyKey_Filter.bat` as administrator). The script does everything in one pass: detects test mode, runs `bcdedit /set testsigning on` if needed → registers the keyboard + mouse INFs via `pnputil` → binds the UpperFilter to currently connected keyboards and mice → prompts for a reboot. **Run it once; after the reboot, test signing and the driver take effect together.** (If enabling test signing fails, Secure Boot is usually still on — disable it per step 1 and re-run the script.)
@@ -259,7 +267,7 @@ Example: Global maps `a→b`, Excel maps `a→c` — pressing a normally types b
 | Orange | Device+app override |
 | Gray | New, not yet saved |
 
-Border thickness shows ownership: **thick (2px)** = this rule lives right inside your currently selected "device × app" scope — right-click to reset it (fall back to the lower layer); **thin (1px)** = inherited from below, display only.
+Border thickness shows ownership: **thick (2px)** = this rule lives right inside your currently selected "device × app" scope; **thin (1px)** = inherited from below, display only.
 
 ---
 
