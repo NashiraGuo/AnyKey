@@ -2432,7 +2432,6 @@ class AnyKeyApp(ctk.CTk):
         self._kb_key_label.configure(text="\u2014")
         self._selected_kb_key = None
         self._refresh_kb_labels()
-        self._refresh_kb_colors()
         self._refresh_macro_table()
         self._schedule_autosave()
 
@@ -2547,8 +2546,6 @@ class AnyKeyApp(ctk.CTk):
 
         return layout
 
-        return layout
-
     # ── 键盘图标签更新 ──
     def _refresh_kb_labels(self):
         if not hasattr(self, '_layer_kb_rects'):
@@ -2649,29 +2646,8 @@ class AnyKeyApp(ctk.CTk):
                 if not getattr(self, '_prebuilding', False):
                     self._fit_output_font(kid, sk, display, cx, cy, int(mw), int(mh))
 
-        # 着色 rect（与 _refresh_kb_colors 等价，省掉一次 111 键遍历）
-        selected = getattr(self, '_selected_kb_key', None)
-        tgt = getattr(self, "_edit_target", None)
-        ln = None
-        if tgt is not None:
-            ln = trees.get("name") if trees else ("base" if idx == 0 else f"fn{idx}")
-        for kid, rect_id in self._layer_kb_rects.items():
-            _has_slot_bg = bool(self._layer_kb_slot_bgs.get(kid))
-            if kid == selected:
-                fill, outline, width = "#AFA9EC", "#534AB7", 2
-                if tgt is not None and ln is not None:
-                    ident = ("layers", ln, kid)
-                    outline, width = self._badge_border(ident, owned_w=4, inherited_w=2)
-            elif kid in key_vals:
-                fill = "#D3D1C7" if _has_slot_bg else "#CECBF6"
-                outline, width = "#AFA9EC", 1
-                if tgt is not None and ln is not None:
-                    ident = ("layers", ln, kid)
-                    outline, width = self._badge_border(ident, owned_w=4, inherited_w=2)
-            else:
-                fill, outline, width = "#D3D1C7", "#B4B2A9", 1
-            self._layer_kb_canvas.itemconfig(rect_id,
-                fill=fill, outline=outline, width=width)
+        # 着色统一委托给唯一入口（此前这里有一份内联副本，与 _refresh_kb_colors 判据不一致）
+        self._refresh_kb_colors()
 
     # ── 缩放后更新字号 ──
     def _update_kb_fonts(self, scale):
@@ -2722,62 +2698,48 @@ class AnyKeyApp(ctk.CTk):
             font=("Consolas", best, "bold"), width=0)
         self._layer_kb_canvas.itemconfigure(ot, state=old_state)
 
-    # ── 键盘图着色 ──
+    # ── 键盘图按键标识符（与 _combo_ident / _leader_ident 同级）──
+    def _kb_key_ident(self, kid, idx=None):
+        if idx is None:
+            idx = self._current_layer_idx
+        trees = self._layer_key_trees[idx] if idx < len(self._layer_key_trees) else None
+        ln = trees.get("name") if trees else None
+        if not ln:
+            ln = "base" if idx == 0 else f"fn{idx}"
+        return ("layers", ln, kid)
+
+    # ── 键盘图着色（唯一入口，与 Combo/Leader 同规则：无条件走 _layer_tag）──
     def _refresh_kb_colors(self):
         if not hasattr(self, '_layer_kb_rects'):
             return
         idx = self._current_layer_idx
         trees = self._layer_key_trees[idx] if idx < len(self._layer_key_trees) else None
         mapped_keys = set()
-        mapped_out = {}
         if trees:
             for r in trees["vars"]:
                 k = r[0].get().strip()
-                tap_v  = r[1].get() if len(r) >= 2 else ""
-                hold_v = r[2].get() if len(r) >= 3 else ""
-                dt_v   = r[4].get() if len(r) >= 5 else ""
-                dh_v   = r[6].get() if len(r) >= 7 else ""
-                if k and (tap_v or hold_v or dt_v or dh_v):
+                if not k:
+                    continue
+                if any(r[i].get() if len(r) > i else "" for i in (1, 2, 4, 6)):
                     mapped_keys.add(k)
-                    mapped_out[k] = tap_v
         selected = getattr(self, '_selected_kb_key', None)
-
-        # 设备编辑模式下计算覆盖/继承集合，用于按键边框着色
-        tgt = getattr(self, "_edit_target", None)
-        overrides = inherited = set()
-        ln = None
-        if tgt is not None:
-            overrides, inherited = self._badge_sets()
-            ln = trees.get("name") if trees else ("base" if idx == 0 else f"fn{idx}")
 
         for kid, rect_id in self._layer_kb_rects.items():
             # 有槽位背景时用底色，让 slot BG 显色
             _has_slot_bg = bool(self._layer_kb_slot_bgs.get(kid))
             if kid == selected:
+                # 选中态 = 填充色 + 同色加粗一档（颜色仍走四层四色，不另立一套调色板）
                 fill = "#AFA9EC"
-                outline = "#534AB7"
-                width = 2
-                # 选中键也显示覆盖/继承边框色（比默认紫色更直观）
-                if tgt is not None and ln is not None:
-                    ident = ("layers", ln, kid)
-                    if ident in overrides:
-                        outline = _THEME["override"]
-                    elif ident in inherited:
-                        outline = _THEME["inherit"]
-                self._layer_kb_canvas.itemconfig(rect_id,
-                    fill=fill, outline=outline, width=width)
+                outline, width = self._badge_border(self._kb_key_ident(kid, idx),
+                                                    owned_w=5, inherited_w=3)
             elif kid in mapped_keys:
                 fill = "#D3D1C7" if _has_slot_bg else "#CECBF6"
-                outline = "#AFA9EC"
-                width = 1
-                if tgt is not None and ln is not None:
-                    ident = ("layers", ln, kid)
-                    outline, width = self._badge_border(ident, owned_w=4, inherited_w=2)
-                self._layer_kb_canvas.itemconfig(rect_id,
-                    fill=fill, outline=outline, width=width)
+                outline, width = self._badge_border(self._kb_key_ident(kid, idx),
+                                                    owned_w=4, inherited_w=2)
             else:
-                self._layer_kb_canvas.itemconfig(rect_id,
-                    fill="#D3D1C7", outline="#B4B2A9", width=1)
+                fill, outline, width = "#D3D1C7", "#B4B2A9", 1
+            self._layer_kb_canvas.itemconfig(rect_id,
+                fill=fill, outline=outline, width=width)
 
     # ── 宏列表（两列：左列+右列）──
     def _refresh_macro_table(self):
@@ -3082,7 +3044,6 @@ class AnyKeyApp(ctk.CTk):
         self._update_layer_tab_style()
         self._refresh_layer_controls()
         self._refresh_kb_labels()
-        self._refresh_kb_colors()
         self._refresh_macro_table()
 
     def _refresh_layer_controls(self):
@@ -3130,7 +3091,6 @@ class AnyKeyApp(ctk.CTk):
         self._refresh_layer_tabs()
         self._refresh_layer_controls()
         self._refresh_kb_labels()
-        self._refresh_kb_colors()
         self._refresh_macro_table()
 
     # ── 层增删 ─────────────────────────────
@@ -3967,18 +3927,6 @@ class AnyKeyApp(ctk.CTk):
             result[nm] = km
         return result
 
-    def _resolve_device_view(self, guid):
-        g = self._config_master
-        g_combo = g.get("comboMap", [])
-        g_layers = g.get("tapDance", dict(EMPTY_LAYERS))
-        g_leader = g.get("leader", dict(EMPTY_LEADER))
-        ov = (g.get("devices") or {}).get(guid)
-        if not ov:
-            return (self._dc(g_combo), self._dc(g_layers), self._dc(g_leader))
-        return (self._merge_combos(g_combo, ov.get("comboMap")),
-                self._merge_layers(g_layers, ov.get("tapDance")),
-                self._merge_leader(g_leader, ov.get("leader")))
-
     def _resolve_app_view(self, guid, app):
         """四层合并视图：全局 → appAware → devices[guid] → devices[guid].apps[app]
         返回旧格式，供编辑器直接使用。"""
@@ -4488,28 +4436,6 @@ class AnyKeyApp(ctk.CTk):
     def _reload_current_page(self):
         if self._current_tab:
             self._switch_tab(self._current_tab)
-    def _badge_sets(self):
-        """返回当前设备编辑目标下的 (overrides, inherited) 集合。
-        overrides = 全局存在且设备桶重写的 ident；inherited = 全局存在但设备桶没有的 ident。
-        无设备目标时返回空集合。"""
-        tgt = getattr(self, "_edit_target", None)
-        if tgt is None:
-            return set(), set()
-        owned = self._owned_identities(tgt)
-        glob = self._global_identities()
-        return owned & glob, glob - owned
-
-    def _scope_identities(self):
-        """返回当前 scope 下的 (owned_set, owned_color, inherit_color)。已弃用，请用 _layer_tag。"""
-        tgt = getattr(self, "_edit_target", None)
-        app = getattr(self, "_current_app", "")
-        if app:
-            owned = self._app_override_identities(tgt, app)
-            return owned, _THEME["green"], _THEME["inherit"]
-        if tgt is not None:
-            overrides, _ = self._badge_sets()
-            return overrides, _THEME["override"], _THEME["inherit"]
-        return set(), _THEME["border"], _THEME["border"]
 
     # ── 四层四色系统 ──
     _FOUR_COLOR = {
@@ -4522,11 +4448,18 @@ class AnyKeyApp(ctk.CTk):
 
     def _layer_tag(self, ident):
         """返回 (color_full, color_dim, is_owned, layer_name)。
-        is_owned 仅当条目属于【当前 scope 的写入容器】时为 True。
+
+        判定顺序 = 真实合并顺序的**逆序**（从最后应用、优先级最高的层往外查）：
+            生效值合并顺序（后者覆盖前者）：global → appAware → devices → devices.apps
+            本函数查色顺序：                device_app → device → global_app → global
+        关键点：device 必须排在 global_app 之前 —— devices[tgt] 会覆盖 appAware.apps[app]，
+        所以「在 devices[tgt] 有、在 devices[tgt].apps[app] 没有」的条目，生效值来自设备层。
+
+        is_owned 仅当条目属于【当前 scope 的写入容器】时为 True：
         设备+app → 只有 devices[tgt].apps[app] 是 owned
         全局+app → 只有 appAware.apps[app] 是 owned
         设备+全局 → 只有 devices[tgt] 是 owned
-        全局+全局 → 全部是 global，无 owned 标记"""
+        全局+全局 → 无 owned 标记，落到 new 灰（不是 global 蓝）"""
         tgt = getattr(self, "_edit_target", None)
         app = getattr(self, "_current_app", "")
 
@@ -4534,10 +4467,10 @@ class AnyKeyApp(ctk.CTk):
             # Scope: 设备+应用
             if ident in self._app_override_identities(tgt, app):
                 return (*self._FOUR_COLOR["device_app"], True, "device_app")
-            if ident in self._app_override_identities(None, app):
-                return (*self._FOUR_COLOR["global_app"], False, "global_app")
             if ident in self._owned_identities(tgt):
                 return (*self._FOUR_COLOR["device"], False, "device")
+            if ident in self._app_override_identities(None, app):
+                return (*self._FOUR_COLOR["global_app"], False, "global_app")
             if ident in self._global_identities():
                 return (*self._FOUR_COLOR["global"], False, "global")
         elif app:
@@ -4563,11 +4496,6 @@ class AnyKeyApp(ctk.CTk):
         full, _, owned, _ = self._layer_tag(ident)
         return (full, owned_w) if owned else (full, inherited_w)
 
-    def _badge_reset_ident(self, ident):
-        """返回可右键重置的 ident，仅当条目属于当前 scope 覆盖桶时非 None。"""
-        _, _, owned, _ = self._layer_tag(ident)
-        return ident if owned else None
-
     def _apply_badge_to_combo_row(self, rd, owned=None, glob=None):
         """刷新单条 combo 行的四层着色（未传参则用当前 scope）。"""
         if rd.get("is_sentinel"):
@@ -4580,14 +4508,12 @@ class AnyKeyApp(ctk.CTk):
             if not k1 or not k2:
                 for e in rd["widgets"][:4]:
                     e.configure(border_color=_THEME["border"])
-                self._bind_row_reset(rd["widgets"], None)
                 return
             row = {"key1": k1, "key2": k2, "layer": layer}
             ident = ("combo", self._combo_ident(row))
             color, width = self._badge_border(ident)
             for e in rd["widgets"][:4]:
                 e.configure(border_color=color, border_width=width)
-            self._bind_row_reset(rd["widgets"], self._badge_reset_ident(ident))
         except Exception:
             pass
 
@@ -4603,14 +4529,12 @@ class AnyKeyApp(ctk.CTk):
                 for e in rd["widgets"][:3]:
                     try: e.configure(border_color=_THEME["border"])
                     except Exception: pass
-                self._bind_row_reset(rd["widgets"][:3], None)
                 return
             ident = ("leader", self._leader_ident({"keys": keys}))
             color, width = self._badge_border(ident)
             for e in rd["widgets"][:3]:
                 try: e.configure(border_color=color, border_width=width)
                 except Exception: pass
-            self._bind_row_reset(rd["widgets"][:3], self._badge_reset_ident(ident))
         except Exception:
             pass
 
@@ -4627,63 +4551,12 @@ class AnyKeyApp(ctk.CTk):
         self._refresh_kb_colors()
 
     def _apply_override_badges(self):
-        """统一着色：根据当前 scope 显示 owned/inherited 颜色。"""
+        """统一着色：根据当前 scope 显示 owned/inherited 颜色（Combo 行 + Leader 行 + 键盘图）。"""
         for rd in getattr(self, "_combo_row_widgets", []):
             self._apply_badge_to_combo_row(rd, None, None)
         for rd in getattr(self, "_seq_row_widgets", []):
             self._apply_badge_to_leader_row(rd, None, None)
-
-    def _bind_row_reset(self, widgets, ident):
-        """给一行控件绑右键：ident 非空→重置该覆盖为全局；否则解绑。"""
-        for w in widgets:
-            try:
-                if ident is None:
-                    w.unbind("<Button-3>")
-                else:
-                    w.bind("<Button-3>", lambda _e=None, i=ident: self._reset_override_entry(i))
-            except Exception:
-                pass
-
-    def _reset_override_entry(self, ident):
-        """把单条覆盖从当前设备桶移除，恢复继承全局。"""
-        tgt = getattr(self, "_edit_target", None)
-        if tgt is None:
-            return
-        devices = self._config_master.setdefault("devices", {})
-        bucket = devices.get(tgt)
-        if not bucket:
-            return
-        kind = ident[0]
-        if kind == "combo":
-            rows = bucket.get("comboMap") or []
-            bucket["comboMap"] = [r for r in rows if self._combo_ident(r) != ident[1]]
-            if not bucket["comboMap"]:
-                bucket.pop("comboMap", None)
-        elif kind == "leader":
-            seqs = bucket.get("leader") or []
-            bucket["leader"] = [s for s in seqs if self._leader_ident(s) != ident[1]]
-            if not bucket["leader"]:
-                bucket.pop("leader", None)
-        elif kind == "layers":
-            _, ln, k = ident
-            lay = bucket.get("tapDance") or {}
-            if ln in lay:
-                lay[ln].pop(k, None)
-                if not lay[ln]:
-                    lay.pop(ln, None)
-            bucket["tapDance"] = lay
-            if not bucket["tapDance"]:
-                bucket.pop("layers", None)
-        if not bucket:
-            devices.pop(tgt, None)
-        # 重新解析视图并重载
-        combo, layers, leader = self._resolve_device_view(tgt)
-        self.cfg["comboMap"] = combo
-        self.cfg["tapDance"] = layers
-        self.cfg["leader"] = leader
-        self._reload_editors()
-        self._update_edit_target_banner()
-        self._schedule_autosave()
+        self._refresh_kb_colors()
 
     def _collect_cfg(self):
         # ── per-device 权威配置流程 ──
