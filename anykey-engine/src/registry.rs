@@ -3,7 +3,7 @@
 //! Registry owns the device scan. It is output-only to Matcher.
 
 use crate::backend::Backend;
-use crate::filter_driver::{AnyKeyEnumDevicesRequest, AnyKeyDeviceInfo};
+use crate::events::{AnyKeyDeviceInfo, AnyKeyEnumDevicesRequest};
 use std::collections::BTreeMap;
 
 // ── DeviceDescriptor — unified device identity (drv → registry, all modules use) ──

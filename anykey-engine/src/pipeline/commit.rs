@@ -762,16 +762,20 @@ impl PipelineState {
         self.emit_log.push(EmitEvent::MouseUp(name.to_string(), device_id));
     }
 
-    /// EmitLayerAct: 推入层激活事件（0→1 跃迁）
+    /// EmitLayerAct: 推入层激活事件
+    /// 设备栏沿用 `current_device`（与其它 emit 一致）。原先硬编码 1 是残留：
+    /// main 侧只用层名、不用该字段，但值不该说谎。
     pub fn emit_layer_act(&mut self, name: &str) {
         self.debug("LAYER", &format!("EmitLayerOn: {}", name));
-        self.emit_log.push(EmitEvent::LayerOn(name.to_string(), 1));
+        let dev = self.current_device;
+        self.emit_log.push(EmitEvent::LayerOn(name.to_string(), dev));
     }
 
-    /// EmitLayerDeact: 推入层反激活事件（→0 跃迁）
+    /// EmitLayerDeact: 推入层反激活事件。设备栏同 `emit_layer_act`。
     pub fn emit_layer_deact(&mut self, name: &str) {
         self.debug("LAYER", &format!("EmitLayerOff: {}", name));
-        self.emit_log.push(EmitEvent::LayerOff(name.to_string(), 1));
+        let dev = self.current_device;
+        self.emit_log.push(EmitEvent::LayerOff(name.to_string(), dev));
     }
 
     /// emit_up_for_output: 按 combo output 字符串释放（与 release_key 的反激活/Up 逻辑一致，

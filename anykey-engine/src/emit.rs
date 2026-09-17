@@ -65,7 +65,7 @@ pub fn is_mouse_key_name(name: &str) -> bool {
 /// 鼠标键名 → FLT 按钮标志（供 I/O 层纯执行）。
 /// 返回 (button_flags, is_wheel)。
 pub fn mouse_name_to_flags(name: &str, is_down: bool) -> Option<(u16, bool)> {
-    use crate::filter_driver::{
+    use crate::events::{
         MOUSE_LEFT_BUTTON_DOWN, MOUSE_LEFT_BUTTON_UP,
         MOUSE_RIGHT_BUTTON_DOWN, MOUSE_RIGHT_BUTTON_UP,
         MOUSE_MIDDLE_BUTTON_DOWN, MOUSE_MIDDLE_BUTTON_UP,

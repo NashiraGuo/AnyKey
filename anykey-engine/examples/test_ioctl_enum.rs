@@ -5,7 +5,8 @@
 //!
 //! Usage: test_ioctl_enum.exe
 
-use anykey_engine::filter_driver::{FilterDriver, AnyKeyEnumDevicesRequest};
+use anykey_engine::events::AnyKeyEnumDevicesRequest;
+use anykey_engine::filter_driver::FilterDriver;
 
 fn wide_to_string(wide: &[u16]) -> String {
     wide.iter()
@@ -24,7 +25,7 @@ fn main() {
 
     let mut index: u32 = 0;
     let mut total = 0u32;
-    let mut buf: Vec<anykey_engine::filter_driver::AnyKeyDeviceInfo> =
+    let mut buf: Vec<anykey_engine::events::AnyKeyDeviceInfo> =
         vec![unsafe { std::mem::zeroed() }; 16];
 
     loop {

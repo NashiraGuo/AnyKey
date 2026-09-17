@@ -14,9 +14,8 @@
 //! Pass: 'x' appears in Notepad after 35s idle.
 //! Fail: 'x' does NOT appear (interception was killed).
 
-use anykey_engine::filter_driver::{
-    ANYKEY_KEY_BREAK, FilterDriver, AnyKeyOutputEvent,
-};
+use anykey_engine::events::{AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::filter_driver::FilterDriver;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::Duration;
 

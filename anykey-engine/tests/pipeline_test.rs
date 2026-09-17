@@ -179,10 +179,10 @@ fn test_layer_stack_activation_deactivation() {
 
     // 去计数器后：每次压栈/出栈都发事件（无 0↔1 跃迁去重，嵌套激活同层连续出现多个事件属正常）
     assert_eq!(s.emit_log, vec![
-        EmitEvent::LayerOn("fn1".to_string(), 1),
-        EmitEvent::LayerOn("fn1".to_string(), 1),
-        EmitEvent::LayerOff("fn1".to_string(), 1),
-        EmitEvent::LayerOff("fn1".to_string(), 1),
+        EmitEvent::LayerOn("fn1".to_string(), 0),
+        EmitEvent::LayerOn("fn1".to_string(), 0),
+        EmitEvent::LayerOff("fn1".to_string(), 0),
+        EmitEvent::LayerOff("fn1".to_string(), 0),
     ]);
 }
 
@@ -197,9 +197,9 @@ fn test_nested_layer_stack() {
 
     // 层事件应按激活/反激活跃迁顺序进入 emit_log（每次操作各发一次）
     assert_eq!(s.emit_log, vec![
-        EmitEvent::LayerOn("fn1".to_string(), 1),
-        EmitEvent::LayerOn("fn2".to_string(), 1),
-        EmitEvent::LayerOff("fn2".to_string(), 1),
+        EmitEvent::LayerOn("fn1".to_string(), 0),
+        EmitEvent::LayerOn("fn2".to_string(), 0),
+        EmitEvent::LayerOff("fn2".to_string(), 0),
     ]);
 }
 

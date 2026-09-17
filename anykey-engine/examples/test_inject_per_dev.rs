@@ -1,5 +1,6 @@
 // Inject to each device separately to find which one works.
-use anykey_engine::filter_driver::{FilterDriver, AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::events::{AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::filter_driver::FilterDriver;
 use std::time::Duration;
 
 fn main() {

@@ -2,7 +2,8 @@
 // Opens driver → enables interception → injects a key → verifies.
 // Usage: cargo run --example test_intercept_inject --features filter-driver
 
-use anykey_engine::filter_driver::{FilterDriver, AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::events::{AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::filter_driver::FilterDriver;
 use std::time::Duration;
 
 fn main() {

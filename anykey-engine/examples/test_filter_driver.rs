@@ -7,7 +7,8 @@
 // The driver starts with interception OFF and stays off after this test exits
 // (FilterDriver::drop calls CloseHandle, the watchdog auto-disables).
 
-use anykey_engine::filter_driver::{FilterDriver, AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::events::{AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::filter_driver::FilterDriver;
 use std::io::{self, Write};
 
 extern "system" {

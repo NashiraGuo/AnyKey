@@ -15,6 +15,9 @@
 //! - 结果经「最新值槽」Mutex<Option<ForegroundInfo>> 交给主循环：latest-wins，
 //!   不阻塞、不堆积、不丢最新状态。
 //! - 按键热路径绝不调用任何窗口/进程查询——主循环只消费 ForegroundInfo。
+//!
+//! 本模块**与后端无关**（只用 SetWinEventHook + GetForegroundWindow）：两个后端下
+//! per-app 覆盖都生效，因此不随 `filter-driver` 特性出现或消失。
 
 /// 前台窗口快照：HWND（isize，裸指针非 Send）+ PID + 进程名 + 单调递增 generation。
 #[derive(Debug, Clone)]
@@ -25,7 +28,6 @@ pub struct ForegroundInfo {
     pub generation: u64,
 }
 
-#[cfg(feature = "filter-driver")]
 mod inner {
     use super::ForegroundInfo;
     use std::ffi::c_void;
@@ -171,14 +173,5 @@ mod inner {
     }
 }
 
-#[cfg(feature = "filter-driver")]
 pub use inner::Sensor as AppSensor;
 
-#[cfg(not(feature = "filter-driver"))]
-pub struct AppSensor;
-
-#[cfg(not(feature = "filter-driver"))]
-impl AppSensor {
-    pub fn new() -> Self { AppSensor }
-    pub fn try_recv(&self) -> Option<ForegroundInfo> { None }
-}

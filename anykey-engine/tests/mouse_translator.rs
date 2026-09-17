@@ -5,7 +5,7 @@
 // The translator must emit EVERY valid edge (fixed order L→R→M→X1→X2, down
 // before up) and only drop self-contradictory edges.
 
-use anykey_engine::filter_driver::{
+use anykey_engine::events::{
     MouseEventTranslator, AnyKeyMouseEvent,
     MOUSE_LEFT_BUTTON_DOWN, MOUSE_LEFT_BUTTON_UP,
     MOUSE_RIGHT_BUTTON_DOWN, MOUSE_RIGHT_BUTTON_UP,

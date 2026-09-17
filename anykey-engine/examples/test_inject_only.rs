@@ -1,5 +1,6 @@
 // Minimal injection test — NO interception, just open driver and inject.
-use anykey_engine::filter_driver::{FilterDriver, AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::events::{AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::filter_driver::FilterDriver;
 use std::time::Duration;
 
 fn main() {

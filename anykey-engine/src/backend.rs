@@ -13,11 +13,12 @@
 //! 4. **选择逻辑（`choose_backend`）是纯函数** —— 回退规则可以单测，不依赖机器状态。
 
 #[cfg(feature = "filter-driver")]
-use crate::filter_driver::{
+use crate::events::{
     AnyKeyDeviceInfo, AnyKeyEnumDevicesRequest, AnyKeyInputEvent, AnyKeyMouseEvent,
-    AnyKeyMouseOutputEvent, AnyKeyOutputEvent, FilterDriver, ANYKEY_DEV_FLAG_VIRTUAL,
-    ANYKEY_FLAG_DEVICE_CHANGED,
+    AnyKeyMouseOutputEvent, AnyKeyOutputEvent, ANYKEY_DEV_FLAG_VIRTUAL,
 };
+#[cfg(feature = "filter-driver")]
+use crate::filter_driver::{FilterDriver, ANYKEY_FLAG_DEVICE_CHANGED};
 #[cfg(feature = "filter-driver")]
 use crate::hook_input::{HookInput, HookLiveness};
 

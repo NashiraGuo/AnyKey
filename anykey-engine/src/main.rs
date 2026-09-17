@@ -20,10 +20,11 @@ use std::collections::HashMap;
 #[cfg(feature = "filter-driver")]
 use anykey_engine::backend::{choose_backend, parse_backend_kind, Backend, BackendKind};
 use anykey_engine::hook_input::HookInput;
-use anykey_engine::filter_driver::{
-    FilterDriver, AnyKeyOutputEvent, AnyKeyMouseOutputEvent,
-    ANYKEY_KEY_BREAK, MouseEventTranslator,
+use anykey_engine::events::{
+    AnyKeyMouseOutputEvent, AnyKeyOutputEvent, MouseEventTranslator,
+    ANYKEY_KEY_BREAK, ANYKEY_KEY_E0, ANYKEY_KEY_E1,
 };
+use anykey_engine::filter_driver::FilterDriver;
 
 // ── Global log file ──
 static LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
@@ -79,14 +80,11 @@ fn msgbox(title: &str, msg: &str) {
 fn msgbox(_title: &str, _msg: &str) {}
 
 // ── scancode → key name (shared by all backends) ──
-#[cfg(feature = "filter-driver")]
-const KEY_E0: u16 = 0x02;
-#[cfg(feature = "filter-driver")]
-const KEY_E1: u16 = 0x04;
 
 fn input_name(code: u16, state: u16) -> String {
-    let e0 = (state & KEY_E0) != 0;
-    let e1 = (state & KEY_E1) != 0;
+    // 位布局就是 ANYKEY_KEY_*（events.rs 是唯一真值），不再本地重复一份常量。
+    let e0 = (state & ANYKEY_KEY_E0) != 0;
+    let e1 = (state & ANYKEY_KEY_E1) != 0;
 
     // Media keys (only when E0 prefix)
     if e0 {

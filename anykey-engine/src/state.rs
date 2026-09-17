@@ -594,7 +594,10 @@ impl PipelineState {
             leader: init_leader,
         }),
         state: DeviceState::default(),
-        current_device: 1,
+        // 占位值：真实 emit 之前必有输入事件（main.rs 在入口把它设成该事件的 device_id），
+        // 所以它只影响"无触发设备就 emit"这种病态路径。
+        // 0 = public.h 的「默认设备」；原先写 1（某个特定设备编号）是设备从 1 起编号时代的残留。
+        current_device: 0,
         current_domain: 1,
         current_app: String::new(),
         emit_log: vec![],

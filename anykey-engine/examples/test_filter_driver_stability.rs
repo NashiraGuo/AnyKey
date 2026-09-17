@@ -13,7 +13,8 @@
 // Run:   target/debug/examples/test_filter_driver_stability.exe [--duration-sec N]
 //        Default N=60 for extended stability mode. Omit for quick mode.
 
-use anykey_engine::filter_driver::{FilterDriver, AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::events::{AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
+use anykey_engine::filter_driver::FilterDriver;
 use std::time::{Duration, Instant};
 
 extern "system" {
