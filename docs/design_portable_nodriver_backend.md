@@ -216,10 +216,12 @@ impl Backend {
 - 若让 cfg 去决定后端，枚举的变体就会在某些构建下消失，于是 `cfg` 会渗透进 `main.rs` 的每一处调用。
 - **建议先不做 cfg 分叉**：两个后端都编进默认构建，等真有精简版需求再加。
 
-#### 两处机械改动（容易漏）
+#### 输出接缝：两处机械改动 + 一处刻意不合流
 
-- `drain_emit_log_flt(pipeline, fd: &FilterDriver, …)`（`:424`）与 `rematch(…, fd: &FilterDriver, …)`（`:851`）的签名都要改成 `&Backend`。
-- `drain_emit_log_flt` 内部的 `TapSI / DownSI / UpSI` 分支（`:497-518`，直连 `emit.rs`）在便携模式下与主输出通道**变成同一条**，两者的差别消失 → 可在 Step 5 顺手合并简化。
+- ✅ `drain_emit_log_flt` 与 `rematch` 的签名已改成 `&Backend`（Step 1）。
+- ⏸ `drain_emit_log_flt` 内部的 `TapSI / DownSI / UpSI` 分支与主输出通道**没有合并** —— 这是决定，不是遗漏（Step 5 复核后维持）：
+  便携模式下两者确实都落到 SendInput，但 ① 日志标签（`send(SI)` vs `send(FLT)`）是**诊断配方**的一部分（§6.3），合并等于换掉读法；
+  ② `Fence` 的时长是 commit 阶段按 FLT 积压量算出来的**决策**，要动就得动管道。收益只是少一段重复代码，不值得碰输出路径。
 
 #### 鼠标输出的两个实现细节
 
@@ -234,11 +236,12 @@ impl Backend {
 | **新增 `src/hook_input.rs`** | **`WH_KEYBOARD_LL` + `WH_MOUSE_LL` 两个钩子同线程安装**（§3.6 实测可共存）+ **专用线程消息泵**（`MsgWaitForMultipleObjectsEx` 模式，同 `app_sensor.rs:64/73-116`）；回调内：`code < 0` 或 `LLKHF_INJECTED`/`LLMHF_INJECTED` → 透传，否则按 §3.1 造事件推入**有界通道**（`try_send` 失败 → 直通降级 + 告警，**绝不在回调里等待**）；鼠标**移动**不进管道（与驱动「纯移动直接转发」一致）；投影逻辑写成纯函数便于单测 |
 | **新增 `src/sendinput_out.rs`** | 鼠标按键 / 滚轮 / 移动的 SendInput 实现；键盘直接转调 `emit.rs:101/120`；文本复用 `main.rs:736 send_unicode_text` |
 | `src/main.rs` | ① 参数解析改全 argv 扫描；② 启动按 §4.2 构造后端，把现有 ~10 处 `fd.*` 调用（`:229/238/244/255/330-339/587/602/732/854/917-923`）收敛到后端句柄之后；③ 输出出口分派（driver → IOCTL / llhook → SendInput）；④ 心跳线程（`:364`）在 llhook 模式下换成"钩子存活对账"（`GetLastInputInfo()` 与会话最后回调时间戳比对，前者推进而后者不动 = 钩子已被摘 → 重装 + 记日志）；⑤ 日志改追加（§6） |
-| `src/registry.rs:85` | `Registry::init(&fd)` 改为接受后端句柄；llhook 模式返回单设备桩（`all_device_ids = vec![0]`、`default_kbd/ms = 0`） |
-| `src/emit.rs:68-75` | 解耦 `filter_driver::MOUSE_*`（这些是逻辑标志、两后端共用，只是放错了模块） |
-| `src/state.rs:456`、`commit.rs:768/774` | `current_device` 初值 `1` 与 `emit_layer_*` 硬编码 `1` → 便携模式取 0（顺手改成取自 `key_state.device_id`，消掉硬编码） |
-| `src/app_sensor.rs:28/174-184` | 目前非 filter-driver 下是 `None` 桩 → 让它在 llhook 模式也生效（**per-app 覆盖在便携模式下仍然可用**） |
-| `Cargo.toml:27-29`、`lib.rs:6` | 增加 `llhook-backend` feature；两个后端可同时编译进默认构建（`filter-driver` 不再是"唯一后端"） |
+| ✅ **新增 `src/events.rs`** | 两个后端共用的 I/O 词汇，**无 cfg** —— 详见 §5.4（Step 5） |
+| ✅ `src/registry.rs` | `scan_all` / `init` / `refresh` 已收 `&Backend`（Step 1）；本步把设备清单负载（`AnyKeyDeviceInfo` / `AnyKeyEnumDevicesRequest`）的 import 改指 `events`。llhook 侧返回单设备桩（device 0，同时标记键盘+鼠标） |
+| ✅ `src/emit.rs` | `MOUSE_*` 的 import 改指 `events`（Step 5） |
+| ✅ `src/state.rs`、`commit.rs` | `current_device` 初值 `1` → `0`；`emit_layer_act/deact` 的硬编码 `1` → `self.current_device`（Step 5，两处都只是「值不说谎」，行为无变化 —— 实测驱动会话 46900 行里真实输出恒为 `dev=4/5`，占位值从不出现） |
+| ✅ `src/app_sensor.rs` | 摘掉全部 4 处 `cfg(feature = "filter-driver")` 与 `#[cfg(not(…))]` 的 `None` 桩（Step 5）—— 它只用 `SetWinEventHook` + `GetForegroundWindow`，**本来就与后端无关**；per-app 覆盖在两个后端下走同一份代码 |
+| ⏸ `Cargo.toml`、`lib.rs` | **不加 `llhook-backend` feature、不做 cfg 分叉** —— 理由见 §5.4 末段 |
 
 ### 5.2 托盘（✅ 已实施）
 
@@ -259,6 +262,26 @@ impl Backend {
 6. 附带清理：`_toggle_per_device` 拆成 `_restyle_device_rows()` + 一行落盘，避免「重画」与「写盘」耦在一个函数里（原来的 `self._schedule_autosave()` 在函数末尾，任何重画都会顺带触发一次保存）。
 
 `anykey_config.json` 顶层 `backend`：`"driver"` / `"llhook"`。**字段不存在 = `driver`**（保持现状行为）；**取值非法也退回 `driver`** —— 一个字段的笔误不该让引擎起不来。✅ 已实施。写入规则：驱动可用时由开关决定；**驱动不可用时开关被禁用 → 保留原存储值**（引擎自己会回退到便携模式，所以「运行=便携、存储=driver」自洽，驱动恢复后自动回 driver）。
+
+### 5.4 模块边界（Step 5 定稿）
+
+**判据（一句话）**：某个类型/常量**在免驱动后端下有对应物吗**？有 → `events.rs`；没有 → `filter_driver.rs`。
+
+| 模块 | 内容 | cfg |
+|---|---|---|
+| ✅ **`src/events.rs`**（新增，216 行） | 四个事件结构体（`AnyKeyInputEvent` / `AnyKeyOutputEvent` / `AnyKeyMouseEvent` / `AnyKeyMouseOutputEvent`）、设备清单负载（`AnyKeyDeviceInfo` / `AnyKeyEnumDevicesRequest`）、`ANYKEY_KEY_*`、`MOUSE_*`（按钮 + 移动标志）、`ANYKEY_DEV_FLAG_*`、`MouseEventTranslator` | **无** |
+| ✅ `src/filter_driver.rs`（763 → 585 行） | 驱动协议：IOCTL 码、`FilterDriver` 句柄与全部方法、心跳/状态/拦截请求结构、`ANYKEY_STATE_*`、`ANYKEY_FLAG_DEVICE_CHANGED` | `filter-driver` |
+| ✅ `src/hook_input.rs`、`src/sendinput_out.rs` | 免驱动输入 / 输出 | **无**（本步摘掉） |
+| ✅ `src/app_sensor.rs` | 前台窗口感知 | **无**（本步摘掉） |
+| `src/backend.rs` | 后端抽象 | `filter-driver` —— 只有 `Driver` 变体需要驱动句柄；同一个 enum 不能一半带特性一半不带 |
+
+**为什么 `MouseEventTranslator` 也算共享词汇**：它把合并鼠标包展开成单边沿事件，纯 `HashMap` 逻辑、不碰驱动句柄；llhook 的鼠标事件同样要过它（统一入口比按后端分叉更不容易漏）。
+
+**为什么不引入 `llhook-backend` feature / 不做 cfg 分叉**（刻意）：
+
+- §5.0 已定：**不让 cfg 决定运行期用哪个后端**；cfg 只该回答"这个二进制里编进了哪些后端代码"。
+- 而现在**没有这样的构建目标**：`main.rs` 的 `fn main` 整体挂在 `filter-driver` 下，`registry` 的设备清单也来自驱动。真要出无驱动构建得先解耦这两处，而发布包只有一个二进制，收益为零。
+- 本步的实际目标是"**cfg 不再说谎**"，已达成：`hook_input` / `sendinput_out` / `app_sensor` 与特性无关；**全仓 `filter_driver::` 引用只剩 `FilterDriver`（10 处）与 `ANYKEY_FLAG_DEVICE_CHANGED`（1 处）** —— 也就是真正只属于驱动的东西。
 
 ---
 
@@ -312,7 +335,7 @@ impl Backend {
 | **Step 2c** | **实机冒烟测试**（`tools/smoke_llhook.py`）：键盘重放 / hold 层 / 鼠标拦截重放 / 键盘→鼠标输出，四项全通。✅ 已做（见 §10） |
 | Step 3 | 日志补齐（requested / fallback / **首次钩子回调** / exit_reason + 收尾横幅）。✅ 已做，提交见 §10；核对脚本 `tools/check_logging_step3.py`（全自动） |
 | Step 4 | 托盘传参（`config.rs` + `engine.rs`）+ GUI 开关 + 配置字段。✅ 已做，提交见 §10；验证脚本 3 个（见附录 B） |
-| Step 5 | 收尾解耦（`registry` / `app_sensor` / `emit` / `current_device`；并把四个事件结构体从 `filter_driver.rs` 搬进中性模块，使两个新模块不再与 `filter-driver` 同 cfg） |
+| Step 5 | 收尾解耦（`registry` / `app_sensor` / `emit` / `current_device`；四个事件结构体搬进 `src/events.rs`，两个新模块不再与 `filter-driver` 同 cfg）。✅ 已做，提交 `18447ad`，详见 §10 与 §5.4 |
 | Step 6 | 打包便携 ZIP（不含 `anykeyFilterDriver/` 与 `安装驱动.bat`）+ README 能力对照表 |
 | **人工验证** | 每个涉及输入的步骤之后都要做一次**实机**冒烟（敲键盘确认映射生效）—— 自动化测试覆盖不到钩子本身。✅ 已完成一次（Step 2c）；**需要人配合时，启动前必须先用提问模式确认用户就在电脑前** |
 
@@ -708,8 +731,30 @@ exit_reason 行     OK    exit_reason = config_read_failed
 **下一步**：Step 5（收尾解耦：四个事件结构体搬出 `filter_driver.rs`、`TapSI/DownSI/UpSI` 通道合流）、
 Step 6（打包便携 ZIP + README 能力对照表）。
 
----
+### Step 5 —— 收尾解耦：事件负载搬进 `src/events.rs` + 摘掉说谎的 cfg（提交 `18447ad`）
 
+**做了什么**
+
+| 项 | 结果 |
+|---|---|
+| 新增 `src/events.rs`（216 行，**无 cfg**） | 四个事件结构体 + 设备清单负载 + `ANYKEY_KEY_*` / `MOUSE_*` / `ANYKEY_DEV_FLAG_*` + `MouseEventTranslator` —— **按行从 `filter_driver.rs` 抽取**（不手抄：`#[repr(C)]` 注释与常量值一律原样搬） |
+| `src/filter_driver.rs` | 763 → 585 行；只留驱动协议；加 `use crate::events::{…}`；`ANYKEY_FLAG_DEVICE_CHANGED` 留在 `AnyKeyDriverStatus` 旁（它是**状态位**，不该混进设备标志）；删掉已无用的 `use std::collections::HashMap` |
+| `hook_input.rs` / `sendinput_out.rs` | import 改指 `events`；`lib.rs` **摘掉 cfg** |
+| `app_sensor.rs` | 摘掉 4 处 `cfg(feature = "filter-driver")` 并删掉返回 `None` 的桩 —— 它只用 `SetWinEventHook` + `GetForegroundWindow`，与后端本来就无关 |
+| `emit.rs` / `registry.rs` / `backend.rs` / `main.rs` | import 改指 `events`；`main.rs` 局部 `KEY_E0/KEY_E1` 删除，改用 `ANYKEY_KEY_E0/E1`（不再有两份位定义） |
+| `state.rs` | `current_device: 1` → `0`（= public.h 的「默认设备」；原值 1 是设备从 1 起编号时代的残留。它是占位值，真实 emit 之前必被输入事件覆盖） |
+| `commit.rs` | `emit_layer_act/deact` 里硬编码的 `1` → `self.current_device`；`tests/pipeline_test.rs` 7 处期望随之 1 → 0 |
+| 7 个 `examples/` + 2 个 `tests/` | import 改指 `events`（`FilterDriver` 仍从 `filter_driver` 取） |
+
+**验证**：`cargo test` **126 项全绿、零警告**（16 组）；`cargo build --examples` 零警告；全仓 `filter_driver::` 引用只剩 `FilterDriver`（10 处）+ `ANYKEY_FLAG_DEVICE_CHANGED`（1 处）。改动 22 文件 +287/−242（净减的是搬迁：`filter_driver.rs` −178，`events.rs` +214）。
+
+**刻意没做的两件事**（都不是「忘了」，已写进 §5.0 / §5.4）：
+1. **不合流 `TapSI/DownSI/UpSI`** —— 便携模式下两者确实都走 SendInput，但日志标签是 §6.3 诊断配方的一部分，`Fence` 时长又是 commit 的决策；收益只是少一段重复代码。
+2. **不加 `llhook-backend` feature、不做 cfg 分叉** —— 没有这样的构建目标，`main` / `registry` 仍要求特性；本步目标是「cfg 不说谎」，已达成。
+
+**⚠️ 又踩了一次同一个坑**：改注释时用内联 `python -c "…"`，字符串里含反引号 → 被 bash 当**命令替换**执行（`Broker: command not found`），替换结果为空、断言才拦住。教训重申（跨项目记忆里已有）：**凡改动文本含反引号 / `$` / `!`，一律先写补丁文件再执行**。同类：`git commit -F -` 的 heredoc 也会被 shell 包装层的 eval 弄坏（消息里的双引号）→ **提交消息写文件后 `git commit -F <file>`**。
+
+---
 
 ## 附录 A：被否决的路线（一句话，防止重走）
 
