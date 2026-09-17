@@ -265,9 +265,12 @@ impl Backend {
 
 顺带记一个既有事实：托盘的 `println!/eprintln!` 在当前架构下**全部丢弃**（`anykey-tray/src/main.rs:1` 是 `#![windows_subsystem = "windows"]`，无控制台）。所以排查只依赖引擎日志。
 
-### 6.1 必须改：日志文件改追加
+### 6.1 日志文件改追加（✅ 已实施）
 
-现在以 `.truncate(true)` 打开（`main.rs:193-199`），而**引擎启动恰好就是"应用后端变更"的动作** —— truncate 会把上一次运行的证据清空。改为**追加**，并在每次启动写一行分隔横幅。日志已是唯一来源，这条是硬需求。
+已从 `.truncate(true)` 改为 **append**，并在每次启动/收尾各写一条横幅：
+`===== engine start <ts> =====` / `===== engine stop <ts> (backend=…) =====`。
+理由：引擎启动恰好就是"应用后端变更"的动作，truncate 会把上一次运行的证据清空。
+日志是**唯一**诊断来源（托盘不写日志），所以这条是硬需求。
 
 ### 6.2 记什么
 
@@ -277,8 +280,8 @@ impl Backend {
 | 参数解释 | `backend requested = driver (来源: argv / 缺省)` |
 | driver 路径 | `CreateFile \\.\AnyKeyFilter` 的结果、失败时的 **Win32 错误码**（2=找不到设备、5=拒绝访问）、重试次数与结果、`set_device_intercept(true)` 返回值 |
 | 回退 | `WARN fallback -> llhook (driver unavailable, last err=<code>)` —— **生效值由此行体现** |
-| llhook 路径 | `SetWindowsHookExW(WH_KEYBOARD_LL)` 结果 + `GetLastError`、消息泵线程已启动、**首次收到钩子回调**（"装上"不等于"收得到"） |
-| 退出 | `exit_reason` + 退出码；两处都失败时两个原因都写 |
+| llhook 路径 | `SetWindowsHookExW(WH_KEYBOARD_LL + WH_MOUSE_LL) -> OK`；失败则带 `GetLastError`；`message pump thread started`；**`first hook callback received (kb_callbacks=N mouse_edges=M, Xms after install)`**（"装上"不等于"收得到"）；后续心跳 `llhook: liveness …`，异常时 `WARN … 钩子已 Nms 无回调`、恢复时 `hook callbacks resumed` |
+| 退出 | `exit_reason = <原因>`（非零退出码时附 `exit code = N`）+ 收尾横幅。可取的值：`config_read_failed` / `config_invalid` / `no_backend_available (exit code = 1)` / `poll_all_failed: …`。两处都失败时两个原因各写一行 |
 
 ### 6.3 怎么读
 
@@ -287,6 +290,12 @@ impl Backend {
 | 没有新的 `===== engine start =====` 行 | 引擎压根没起来（托盘没拉起 / exe 缺失），**不是后端问题** |
 | 有 `requested = X`、**没有** `fallback` 行 | 请求的后端**直接生效** |
 | 有 `WARN fallback -> llhook` | 驱动本次没用上，原因看紧跟的错误码；per-device 不生效属**预期** |
+| 有 `first hook callback received` | 钩子链路确实通。括号里哪个计数先非零 = 键盘还是鼠标先到。⚠️ **`mouse_edges` 也计注入事件**，所以这一行只证明"钩子被调用过"；要判断"物理键能到"得看 `kb_callbacks`（这正是 §3.4 提权窗口问题的判据） |
+| 日志尾部**既无** `exit_reason` **也无** `engine stop` | 进程被**外部强杀**（托盘的重载/暂停/退出都走 `taskkill`）—— 这是正常路径，不是故障 |
+| 尾部有 `exit_reason = config_read_failed` / `config_invalid` | 配置文件的问题，与后端无关 |
+| 尾部有 `exit_reason = no_backend_available (exit code = 1)` | 驱动与钩子都起不来；具体两条原因在它上面几行 |
+
+> 注：配置类失败当前以 `return` 结束，**进程退出码为 0**。若将来托盘想靠退出码区分"配置错"与"正常结束"，需改成非零 —— 留到 Step 4 动托盘时一起定。
 
 ---
 
@@ -298,7 +307,7 @@ impl Backend {
 | Step 1 | `backend.rs`：`enum Backend` + 薄方法，**行为完全不变**（等价重构）。✅ 已做，提交 `b85762c` |
 | Step 2 | `hook_input.rs`（键盘+鼠标两个钩子 + 消息泵 + 有界通道 + 1:1 投影）+ `sendinput_out.rs`（鼠标输出）+ `Backend::LlHook` 变体 + `--backend=` 参数与引擎内回退。✅ 已做，提交 `78a5e39` / `b16c231` |
 | **Step 2c** | **实机冒烟测试**（`tools/smoke_llhook.py`）：键盘重放 / hold 层 / 鼠标拦截重放 / 键盘→鼠标输出，四项全通。✅ 已做（见 §10） |
-| Step 3 | 日志补齐（requested / fallback / **首次钩子回调** / exit_reason） |
+| Step 3 | 日志补齐（requested / fallback / **首次钩子回调** / exit_reason + 收尾横幅）。✅ 已做，提交见 §10；核对脚本 `tools/check_logging_step3.py`（全自动） |
 | Step 4 | 托盘传参 + GUI 开关 + 配置字段 |
 | Step 5 | 收尾解耦（`registry` / `app_sensor` / `emit` / `current_device`；并把四个事件结构体从 `filter_driver.rs` 搬进中性模块，使两个新模块不再与 `filter-driver` 同 cfg） |
 | Step 6 | 打包便携 ZIP（不含 `anykeyFilterDriver/` 与 `安装驱动.bat`）+ README 能力对照表 |
@@ -581,6 +590,59 @@ update-ref refs/heads/main <commit> # 移动 main 指针
 
 ---
 
+### Step 3 —— 日志补齐：首次钩子回调 + 统一 exit_reason（提交 `ef59c9c`，全自动核对通过）
+
+**改动**（`main.rs` + `hook_input.rs`，+65/−21）：
+
+| 新增 | 位置 | 说明 |
+|---|---|---|
+| `log_exit(reason, code)` | `main.rs`（嵌套函数） | 统一退出原因记录，**模态 msgbox 之前**落盘（msgbox 会把进程卡住） |
+| `exit_reason = …` | 配置读失败 / 配置非法 / 两个后端都失败 / `poll_all_failed` | 覆盖全部已日志化的退出路径 |
+| `===== engine stop <ts> (backend=…) =====` | 主循环之后 | 收尾横幅 |
+| `llhook: first hook callback received (…)` | 主循环（每次迭代判一次，**只打一行**） | **装上 ≠ 收得到**；绝不在回调里写日志（回调必须极快） |
+| `HookLiveness.since_install_ms` | `hook_input.rs` | 让上面那行能报"安装后多久收到第一次回调" |
+
+**核对方式：`tools/check_logging_step3.py`（全自动，不需要人按键）**。
+能自动化的关键：`mouse_edges` 在钩子回调里**先于**"是否注入"的判断自增，所以一次
+`SendInput` 注入的滚轮就能证明"钩子装上后确实收到了回调"；注入前把光标移到**脚本自己的置顶窗口**上、
+用完立刻还原位置，不碰用户任何窗口。实测结果：
+
+```
+启动横幅 argv      OK    argv = [ ... "--backend=llhook" ]
+请求的后端          OK    backend requested = llhook (来源: argv)
+生效后端           OK    Backend: llhook
+钩子安装           OK    llhook: SetWindowsHookExW(WH_KEYBOARD_LL + WH_MOUSE_LL) -> OK
+首次钩子回调         OK    llhook: first hook callback received (kb_callbacks=0 mouse_edges=1, 4047ms after install)
+存活对账           OK    llhook: liveness kb_callbacks=0 mouse_edges=0 mouse_moves=0 …
+强杀读法           OK    日志里无 exit_reason / engine stop（taskkill 后确实两行都没有）
+exit_reason 行     OK    exit_reason = config_read_failed
+=> 全部通过
+```
+
+**这一轮修掉的两个小问题**：
+1. `exit_reason` 的赋值在 `msgbox` **之后** → 弹窗是模态的，进程会卡在弹窗上，日志可能永远写不出。
+   改成先落盘再弹窗。（"失败路径必须在退出前写盘"这条硬要求。）
+2. `KEY_E0` 上面有**重复的 `#[cfg(feature = "filter-driver")]`**，顺手清掉。
+
+**踩坑记录**：
+- **`SendInput` 不能传 `byref(数组)`**：`ctypes` 报 `expected LP_INPUT instance instead of pointer to INPUT_Array_1`。
+  正确写法是**直接传数组**（`user32.SendInput(1, arr, sizeof(INPUT))`），`ctypes` 会自动转成 `POINTER(INPUT)`。
+  同一仓库里的 `probe_llmouse.py` 一直是对的写法，照抄即可。
+- **测试脚本自己崩了也必须保证恢复**：第一版 `finally` 只还原光标、没杀引擎，脚本在注入处抛异常后，
+  引擎被留在了系统里继续吞键。已改成 `SPAWNED` 列表 + `finally` 里无条件全部 `taskkill` 并复查残留。
+  （这条同时回写进了 `windows-input-chain-verify` 技能。）
+- **Python 文本模式写 `.rs` 会把行尾变成 CRLF**：`open(p,'w')` 默认 `newline=None`，在 Windows 上把 `
+`
+  写成 `
+
+`。仓库里 `.rs` 是 LF，于是 `git status` 出现"幽灵修改"。写完必须核对 CRLF 计数并归一化
+  （`raw.replace(b'\r\n', b'\n')`，字节数应**减少**）。
+
+**验证**：`cargo test` **126 项全绿、零警告**。
+
+---
+
+
 ## 附录 A：被否决的路线（一句话，防止重走）
 
 | 路线 | 否决原因 |
@@ -609,3 +671,6 @@ update-ref refs/heads/main <commit> # 移动 main 指针
 | `probe_kbdvsc.py` | 全量读 218 个布局的 `pusVSCtoVK`（判断"布局能否表达 X"） |
 | `probe_nolegacy.py` | `RIDEV_NOLEGACY` 会连带砍掉 `SendInput` 重放 |
 | `probe_tsf_profiles.py` | TSF 同一时刻只有一个 active profile |
+| `smoke_llhook.py` | **便携后端端到端冒烟**（需人按提示操作）：键盘重放 / hold 层 / 鼠标拦截重放 / 键盘→鼠标输出。守卫三件套＝到点强杀 + 独立 DETACHED 看门狗 + 配置复制到 `%TEMP%`（不碰用户安装目录）。**启动前必须先用提问模式确认用户已在电脑前** |
+| `check_logging_step3.py` | **全自动**核对日志行：正常启动的六行 + 强杀后"无 exit_reason"读法 + 配置读失败的 `exit_reason`。用"注入一次滚轮"触发钩子回调（`mouse_edges` 先于注入判定自增），并把光标临时移到脚本自己的窗口上再还原 |
+| `doc_to_main.py` | 用 git 底层命令把文档提交到 main —— **本机 `git switch` 会毁工作区**（见 §10 事故记录），所以不切分支 |
