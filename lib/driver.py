@@ -5,6 +5,7 @@ Falls back gracefully if the driver is not installed.
 """
 import ctypes
 import ctypes.wintypes as w
+import os
 import struct
 
 # ── IOCTL codes ──
@@ -332,6 +333,63 @@ def get_driver():
     if _fd_instance is None:
         _fd_instance = FilterDriver()
     return _fd_instance
+
+
+# ── 驱动可用性探测（只读，不提权、不改系统）──────────────────────────────
+# 取值名就是"下一步该做什么"，三种情况处理动作完全不同，只说"不可用"等于没说：
+#   not_installed → 运行 安装驱动.bat
+#   file_missing  → .sys 不在 System32\drivers，重装驱动
+#   not_loaded    → 已注册、文件也在，却打不开控制设备：服务未启动 / 签名被拒（testsigning 未开）
+DRIVER_OK = "ok"
+DRIVER_NOT_INSTALLED = "not_installed"
+DRIVER_FILE_MISSING = "file_missing"
+DRIVER_NOT_LOADED = "not_loaded"
+
+# INF 里 `AddService = anykey_flt`（键盘 / 鼠标两份 inf 共用同一个服务名）
+DRIVER_SERVICE = "anykey_flt"
+
+
+def probe_driver():
+    r"""探测驱动是否可用，返回 ``(available, code)``。
+
+    只读探测：
+      1. 直接 CreateFile 控制设备 —— 成功即"可用"（服务已加载且能打开）。
+      2. 失败 → 读服务键 HKLM\SYSTEM\CurrentControlSet\Services\anykey_flt
+         （普通用户可读）判断是否已注册，再按 ImagePath 检查 .sys 是否存在。
+    """
+    fd = get_driver()
+    if fd.open():
+        fd.close()
+        return True, DRIVER_OK
+
+    try:
+        import winreg
+    except ImportError:                      # 非 Windows / 无 winreg
+        return False, DRIVER_NOT_INSTALLED
+
+    try:
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                             "SYSTEM\\CurrentControlSet\\Services\\" + DRIVER_SERVICE)
+    except OSError:
+        return False, DRIVER_NOT_INSTALLED   # 服务未注册 = 没装过
+
+    try:
+        try:
+            image, _ = winreg.QueryValueEx(key, "ImagePath")
+        except OSError:
+            image = ""
+    finally:
+        winreg.CloseKey(key)
+
+    # ImagePath 形如 \??\C:\WINDOWS\System32\drivers\anykey_flt.sys
+    path = str(image).strip()
+    if path.startswith("\\??\\"):
+        path = path[4:]
+    if path and not os.path.exists(path):
+        return False, DRIVER_FILE_MISSING
+
+    # 已注册、文件也在，却打不开控制设备 → 服务没起来 / 签名不被接受
+    return False, DRIVER_NOT_LOADED
 
 
 # ── PS/2 Set 1 scan code → key name ──

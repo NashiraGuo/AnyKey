@@ -46,6 +46,33 @@ CARD_GAP = 8
 CARD_RADIUS = 12
 
 # ──────────────────────────────────────────────
+# 输入后端（驱动 / 便携）—— 驱动可用性探测与原因文案
+# ──────────────────────────────────────────────
+# 三种"不可用"的**处理动作完全不同**，所以必须分开报，只说"不可用"等于没说：
+#   未安装   → 运行 安装驱动.bat
+#   文件缺失 → 重装驱动
+#   未加载   → 检查 testsigning（改完要重启）
+_DRIVER_REASON_TEXT = {
+    "not_installed": "驱动未安装 → 运行 安装驱动.bat",
+    "file_missing": "驱动文件缺失 → 重装驱动",
+    "not_loaded": "驱动未加载 → 检查 testsigning（改完需重启）",
+}
+
+
+def _probe_driver_safe():
+    """探测驱动是否可用，返回 (available, code)。
+
+    探针本身出任何问题都当作"不可用"，绝不让它阻止 GUI 启动。
+    """
+    try:
+        from lib.driver import probe_driver
+        ok, code = probe_driver()
+        return bool(ok), str(code)
+    except Exception as e:                                   # noqa: BLE001
+        print(f"probe_driver error: {e}")
+        return False, "unknown"
+
+# ──────────────────────────────────────────────
 # 自定义控件：可单独控制下拉箭头（3点V形）颜色的 ComboBox
 # customtkinter 5.2.2 的箭头颜色跟随 text_color（与文字共用），无独立参数；
 # 这里重写 _draw，在父级绘制后强制把箭头刷成柔和灰，文字保持 text_color 不变。
@@ -121,6 +148,9 @@ class AnyKeyApp(ctk.CTk):
         self.geometry(f"{init_w}x{init_h}+{x}+{y}")
 
         self.cfg = load_config()
+        # 驱动可用性：只读探测一次并记住 —— 一次 GUI 会话内它不会变（装驱动要重启），
+        # 每次刷新控件都去 CreateFile 没有意义。后端开关的可用性与原因提示依赖它。
+        self._driver_ok, self._driver_reason = _probe_driver_safe()
         # 迁移：旧 config 的序列缺 _rawSeq → 用 keys 拼接补上（保持显示一致）
         for seq in self.cfg.get("leader", {}).get("sequences", []):
             if not seq.get("_rawSeq"):
@@ -460,6 +490,30 @@ class AnyKeyApp(ctk.CTk):
     def _build_device_panel(self):
         inner = ctk.CTkFrame(self._sidebar, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=8, pady=4)
+
+        # ── 运行模式（输入后端）──
+        # 放在"设备设置"之上：它决定**设备维度能不能用**（便携模式没有设备维度），
+        # 两个开关的联动关系因此一眼可见。
+        ctk.CTkLabel(inner, text="运行模式", font=("Microsoft YaHei",14,"bold"),
+                     text_color=_THEME["text_mid"]).pack(anchor="w")
+        be_row = ctk.CTkFrame(inner, fg_color="transparent")
+        be_row.pack(fill="x", pady=(2,1))
+        self._backend_lbl = ctk.CTkLabel(be_row, text="便携模式", font=("Microsoft YaHei",11),
+                                         text_color=_THEME["text_dark"])
+        self._backend_lbl.pack(side="left")
+        # config 顶层 backend 字段：ON = llhook（免驱动），OFF = driver。缺省 driver。
+        self._backend_var = ctk.BooleanVar(
+            value=(str(self.cfg.get("backend") or "driver").strip().lower() == "llhook"))
+        self._backend_sw = ctk.CTkSwitch(be_row, text="", variable=self._backend_var,
+            command=self._toggle_backend, width=36, switch_width=32, switch_height=16,
+            progress_color=_THEME["green"])
+        self._backend_sw.pack(side="right")
+        # 说明行：始终有内容，让"这个开关是什么"自解释
+        self._backend_hint = ctk.CTkLabel(inner, text="", justify="left", wraplength=180,
+            font=("Microsoft YaHei",9), text_color=_THEME["text_light"])
+        self._backend_hint.pack(anchor="w")
+        ctk.CTkFrame(inner, height=1, fg_color=_THEME["border"]).pack(fill="x", pady=(4,4))
+
         ctk.CTkLabel(inner, text="设备设置", font=("Microsoft YaHei",14,"bold"),
                      text_color=_THEME["text_mid"]).pack(anchor="w")
         all_row = ctk.CTkFrame(inner, fg_color="transparent")
@@ -510,6 +564,8 @@ class AnyKeyApp(ctk.CTk):
         self._device_rows = []
         self._identifying = False
         self._refresh_devices()
+        # 设备行建好后应用一次联动状态：驱动不可用 / 便携模式 → 设备栏整体置灰
+        self._apply_backend_ui()
 
     def _build_global_entry_row(self):
         """设备栏顶部『基础设置』伪条目：点击进入全局基础层编辑。"""
@@ -876,9 +932,85 @@ class AnyKeyApp(ctk.CTk):
             self._update_device_selection_ui()
         except Exception:
             pass
+        # 驱动可用性可能在 GUI 开着的时候变化（用户刚装完驱动）→ 每次刷新设备时**重探一次**，
+        # 顺带刷新运行模式区。这样"装驱动 → 点刷新 → 开关恢复可用"不需要重启 GUI。
+        if hasattr(self, "_backend_var"):
+            self._driver_ok, self._driver_reason = _probe_driver_safe()
+            self._apply_backend_ui()
+
+    def _device_ui_enabled(self):
+        """「设备维度」相关控件当前是否可交互 —— 全 GUI 唯一判据。
+
+        两个条件同时成立才可用：
+          ① **当前生效后端**不是便携模式。生效后端 = 显式选了 llhook，
+             或驱动不可用（引擎在驱动不可用时自己会回退到 llhook，见设计文档 §4.2）；
+          ② 用户打开了「设备独立设置」（OFF 时本来就全部走全局映射，设备行无意义）。
+
+        所有置灰/恢复都从这一个函数派生，避免两处判据打架（这是本项目着色类
+        bug 的典型来源：同一属性有两个着色入口）。
+        """
+        if self._backend_var.get() or not self._driver_ok:
+            return False
+        return bool(self._per_device_var.get())
+
+    def _apply_backend_ui(self):
+        """按「驱动可用性 × 后端选择」刷新运行模式区与设备栏。
+
+        规则（设计文档 §16）：
+          - **驱动不可用**：后端开关禁用 + 给出具体原因；此时**不改写存储值** ——
+            用户并没有做出选择，而引擎自己会回退到便携模式，存储的"意图"要留到驱动恢复。
+          - **便携模式生效**（显式选 llhook，或驱动不可用）：「设备独立设置」开关禁用、
+            设备行置灰。**灰 ≠ 清空** —— 只禁交互，配置里的 perDevice 与每设备设置原样保留。
+        """
+        llhook = bool(self._backend_var.get())
+        effective_llhook = llhook or (not self._driver_ok)
+
+        # ── 后端开关本身 ──
+        if self._driver_ok:
+            self._backend_sw.configure(state="normal", progress_color=_THEME["green"])
+            self._backend_lbl.configure(text_color=_THEME["text_dark"])
+        else:
+            self._backend_sw.configure(
+                state="disabled",
+                progress_color=_THEME["green"] if llhook else _THEME["text_disabled"])
+            self._backend_lbl.configure(text_color=_THEME["text_disabled"])
+
+        # ── 说明行 ──
+        if not self._driver_ok:
+            hint = ("驱动不可用（%s）\n引擎会自动按便携模式运行；此处设置保留，驱动恢复后自动生效"
+                    % _DRIVER_REASON_TEXT.get(self._driver_reason, "原因未知"))
+        elif llhook:
+            hint = "便携模式：免驱动运行，不支持按设备独立设置"
+        else:
+            hint = "驱动模式：全功能（含按设备独立设置）"
+        self._backend_hint.configure(text=hint)
+
+        # ── 设备栏联动 ──
+        if getattr(self, "_per_device_sw", None) is not None:
+            self._per_device_sw.configure(state="disabled" if effective_llhook else "normal")
+        if hasattr(self, "_device_rows"):
+            self._restyle_device_rows(self._device_ui_enabled())
+
+    def _toggle_backend(self):
+        """切换输入后端（驱动 ↔ 便携）。
+
+        **只改 UI 与配置，不重启引擎** —— 与 GUI 其它设置一致：写 config，
+        等引擎重载（托盘菜单的"重载"）才生效。
+        """
+        self._apply_backend_ui()
+        self._schedule_autosave()
 
     def _toggle_per_device(self):
-        per_dev = self._per_device_var.get()
+        """「设备独立设置」开关：只负责重画 + 落盘，判据统一在 `_device_ui_enabled()`。"""
+        self._restyle_device_rows(self._device_ui_enabled())
+        self._schedule_autosave()
+
+    def _restyle_device_rows(self, per_dev):
+        """按「设备维度当前是否可用」刷新所有设备行的外观（灰 / 正常）。
+
+        `per_dev` 由 `_device_ui_enabled()` 给出。**灰掉 ≠ 清空**：这里只改控件外观与
+        可交互性，绝不改写配置里任何设备设置（配置值始终由控件当前值决定）。
+        """
         _tc_disabled = _THEME["text_disabled"]
         _tc_light = _THEME["text_light"]
         _tc_dark = _THEME["text_dark"]
@@ -920,7 +1052,6 @@ class AnyKeyApp(ctk.CTk):
                 if _lbl:
                     _lbl.configure(text_color=_label_color)
             # 行背景和边框保持不变（不再改色）
-        self._schedule_autosave()
 
     # step-4: 复合设备（键盘+鼠标共享 ContainerID）现在在
     # _refresh_devices 中按子节点独立成行，不再合并，故无需此合并函数。
@@ -4687,6 +4818,16 @@ class AnyKeyApp(ctk.CTk):
 
         # 引擎调试开关由系统托盘菜单负责（GUI 不放置），保存时保留 config 中已有值
         cfg["debug_enabled"] = master.get("debug_enabled", self.cfg.get("debug_enabled", False))
+
+        # 输入后端（"谁拥有开关，谁写这个字段"：开关在 GUI 手里 → GUI 写这个字段）
+        # 驱动不可用时开关处于**禁用**态 —— 用户并没有做出选择，于是**保留原存储值**，
+        # 不把它改成 llhook：引擎在驱动不可用时会自己回退到便携模式，所以
+        # "运行 = 便携、存储 = driver" 是自洽的，驱动恢复后自动回到 driver。
+        # 若这里强行改写，用户装回驱动后就再也回不到驱动模式了。
+        if self._driver_ok and hasattr(self, "_backend_var"):
+            cfg["backend"] = "llhook" if self._backend_var.get() else "driver"
+        else:
+            cfg["backend"] = master.get("backend", self.cfg.get("backend", "driver"))
 
         # 保留驱动提示标记
         if "_driver_prompted" in master:
