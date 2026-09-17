@@ -240,22 +240,25 @@ impl Backend {
 | `src/app_sensor.rs:28/174-184` | 目前非 filter-driver 下是 `None` 桩 → 让它在 llhook 模式也生效（**per-app 覆盖在便携模式下仍然可用**） |
 | `Cargo.toml:27-29`、`lib.rs:6` | 增加 `llhook-backend` feature；两个后端可同时编译进默认构建（`filter-driver` 不再是"唯一后端"） |
 
-### 5.2 托盘（`anykey-tray/src/engine.rs`）
+### 5.2 托盘（✅ 已实施）
 
 **只加一项**：`start()` 里读 config 的 `backend`（**每次启动都读，不缓存**），追加 `--backend=<值>`。
 不新增日志、不做回退、不做重试、不动 `ipc.rs` / `Shared`。
 
-### 5.3 GUI（`gui/main.py`）
+落实为两个文件：新增 `src/config.rs`（只读那几个「机器属性」字段：`load_bool` / `load_backend` + 纯函数 `normalize_backend`，带 3 个单测），`engine.rs` 里 3 行调用。
+**新开模块的原因**：`engine.rs` 读一个字段不该反向依赖 `app.rs`；顺带把 `app.rs::load_debug_flag` 也改为复用 `config::load_bool`，去掉第二处 `serde_json` 取值。
 
+### 5.3 GUI（✅ 已实施）
+四条全部落地，位置在侧栏「**运行模式**」与「设备设置」两个小节（后端开关放在设备开关之上 —— 它决定设备维度能不能用，联动关系一眼可见）：
 1. 设置界面加**后端开关**（driver / LLHook）：驱动不可用则**灰掉 + 显示具体原因**（未安装 / 已装未加载 / testsigning 未开 —— 三者处理动作不同）。
 2. 设备栏"设备独立设置"开关按**当前选择的后端**联动：选 LLHook 也灰。**灰掉只禁用 UI，不清配置内容**（切回 driver 自动恢复）。
 3. 保存配置时把顶层 `backend` 一并写入。
    ⚠️ 该文件的保存是"读全文件 → 改 → 整写"，它**显式保留**不认识的顶层字段（`main.py:4688-4692` 的 `debug_enabled` / `_driver_prompted`）—— 若 `backend` 不由 GUI 自己写，就必须加进那个保留块，否则拨完开关一保存就被抹掉。
-4. 可选：设置页加"打开日志文件"入口（GUI 目前完全没有日志引用）。
+4. ✅ 落地为准：开关 = 「便携模式」ON/OFF（ON = `llhook`）；说明行**始终有内容**（驱动模式 / 便携模式 / 驱动不可用+具体动作），让「这个开关是什么」自解释；**每次点「刷新」都重探一次驱动**（用户刚装完驱动 → 不必重启 GUI）。「打开日志文件」入口未做，留待后续。
+5. **判据唯一**：新增 `_device_ui_enabled()` = `驱动可用 and 非便携 and perDevice`，所有置灰/恢复都从它派生（本项目着色类 bug 的典型来源是「同一属性两个判据」）。
+6. 附带清理：`_toggle_per_device` 拆成 `_restyle_device_rows()` + 一行落盘，避免「重画」与「写盘」耦在一个函数里（原来的 `self._schedule_autosave()` 在函数末尾，任何重画都会顺带触发一次保存）。
 
-### 5.4 配置字段
-
-`anykey_config.json` 顶层 `backend`：`"driver"` / `"llhook"`。**字段不存在 = `driver`**（保持现状行为）。
+`anykey_config.json` 顶层 `backend`：`"driver"` / `"llhook"`。**字段不存在 = `driver`**（保持现状行为）；**取值非法也退回 `driver`** —— 一个字段的笔误不该让引擎起不来。✅ 已实施。写入规则：驱动可用时由开关决定；**驱动不可用时开关被禁用 → 保留原存储值**（引擎自己会回退到便携模式，所以「运行=便携、存储=driver」自洽，驱动恢复后自动回 driver）。
 
 ---
 
@@ -308,7 +311,7 @@ impl Backend {
 | Step 2 | `hook_input.rs`（键盘+鼠标两个钩子 + 消息泵 + 有界通道 + 1:1 投影）+ `sendinput_out.rs`（鼠标输出）+ `Backend::LlHook` 变体 + `--backend=` 参数与引擎内回退。✅ 已做，提交 `78a5e39` / `b16c231` |
 | **Step 2c** | **实机冒烟测试**（`tools/smoke_llhook.py`）：键盘重放 / hold 层 / 鼠标拦截重放 / 键盘→鼠标输出，四项全通。✅ 已做（见 §10） |
 | Step 3 | 日志补齐（requested / fallback / **首次钩子回调** / exit_reason + 收尾横幅）。✅ 已做，提交见 §10；核对脚本 `tools/check_logging_step3.py`（全自动） |
-| Step 4 | 托盘传参 + GUI 开关 + 配置字段 |
+| Step 4 | 托盘传参（`config.rs` + `engine.rs`）+ GUI 开关 + 配置字段。✅ 已做，提交见 §10；验证脚本 3 个（见附录 B） |
 | Step 5 | 收尾解耦（`registry` / `app_sensor` / `emit` / `current_device`；并把四个事件结构体从 `filter_driver.rs` 搬进中性模块，使两个新模块不再与 `filter-driver` 同 cfg） |
 | Step 6 | 打包便携 ZIP（不含 `anykeyFilterDriver/` 与 `安装驱动.bat`）+ README 能力对照表 |
 | **人工验证** | 每个涉及输入的步骤之后都要做一次**实机**冒烟（敲键盘确认映射生效）—— 自动化测试覆盖不到钩子本身。✅ 已完成一次（Step 2c）；**需要人配合时，启动前必须先用提问模式确认用户就在电脑前** |
@@ -657,6 +660,56 @@ exit_reason 行     OK    exit_reason = config_read_failed
 - 顺带记一个仓库根的垃圾文件：`nul`（0 字节）。是 shell 把 `> nul` 当成重定向造出来的产物，
   不在 git 里、也不影响构建；因为是 Windows 保留设备名，常规删除方式不一定管用 —— **别去动它**。
 
+### Step 4 —— 托盘传参 + GUI 开关（提交  / ，全链验证通过）
+
+**改动五处**：
+
+| 文件 | 改动 |
+|---|---|
+| `anykey-tray/src/config.rs`（新） | `load_bool` / `load_backend` + 纯函数 `normalize_backend`；**每次调用都重读文件、不缓存**（写者是 GUI；缓存在托盘启动时会出现「GUI 改了 → 重载 → 还是旧值」） |
+| `anykey-tray/src/engine.rs` | `start()` 里追加 `--backend=<config::load_backend(...)>` |
+| `anykey-tray/src/app.rs` | `load_debug_flag` 改为复用 `config::load_bool`（去掉第二处 `serde_json` 取值） |
+| `lib/driver.py` | 新增 `probe_driver()`：只读探测，返回 `(available, code)`，code ∈ `ok` / `not_installed` / `file_missing` / `not_loaded`（服务名 `anykey_flt`；读 `HKLM` 下服务的 `ImagePath` 并检查 .sys 是否存在） |
+| `gui/main.py` | 侧栏新增「运行模式」小节（开关 + 说明行）；`_device_ui_enabled()` 作**唯一判据**；`_toggle_per_device` 拆成「重画 + 落盘」；`_refresh_devices` 末尾重探驱动；`_collect_cfg` 写 `backend` |
+
+**为什么探测要分四种**：未安装 / 文件缺失 / 未加载 的**处理动作完全不同**
+（运行 `安装驱动.bat` / 重装 / 检查 testsigning 并重启），只说「不可用」等于没说。
+
+**三条验证（都不需要人参与）**：
+
+1. `tools/probe_backend_switch.py`（假 self + 真 CTk 控件）→ `mismatches = 0`、`verdict = pass`。
+   8 组真值表 + 控件 `state` + 文案归类 + 变量未被改写；期望值由**独立表达式**算出（不调用被测函数），
+   所以被测代码写错会真的报 MISMATCH。输出是「期望 vs 实际」对照表。
+2. `tools/smoke_backend_switch_e2e.py`（**真 AnyKeyApp + 临时配置**）→ 4/4 通过、`verdict = pass`：
+
+   | 场景 | 期望 backend | 实际 | 「设备独立设置」开关 |
+   |---|---|---|---|
+   | 驱动可用 + 便携 OFF | driver | driver | normal |
+   | 驱动可用 + 便携 ON | llhook | llhook | disabled（perDevice 仍保留 True）|
+   | 驱动不可用 + OFF（存储 llhook）| **llhook（保留）** | llhook | disabled |
+   | 驱动不可用 + ON（存储 driver）| **driver（保留）** | driver | disabled |
+
+   同时 md5 证明**用户真实 `anykey_config.json` 未被改动**（前后都是 `64865729b2ff`）。
+3. `tools/check_tray_backend_arg.py`（隔离沙箱：托盘/引擎副本 + **最小空映射配置**）→ 两轮 OK：
+   配置 `backend=llhook` → 引擎 argv 出现 `--backend=llhook`；配置**缺该字段** → `--backend=driver`。
+   沙箱用空映射，所以那 2×5 秒里键盘是「吞掉再原样重放」，不会改掉任何按键；跑完复查进程残留为 0。
+
+**踩坑**：
+- 托盘 `cargo test` **不产出 exe**（只出测试二进制）→ 验证参数传递前必须先 `cargo build`。
+- PowerShell 里把两个 Tk 脚本串在一条命令里，第一个结束后会连带掐掉后面的 —— **一条命令只跑一个 GUI 脚本**
+  （`anykey-gui-verify` 技能里记过，这次又撞了一次）。
+- 探针第一版就崩：假 self 少设 `_driver_reason`。**探针自身也要按「期望值独立算出」来写**，
+  否则产品代码一改字段名，炸的是探针而不是断言。
+- 写补丁脚本时在双引号字符串里混进 ASCII 双引号 → SyntaxError。**中文正文里的强调一律用「」**。
+
+**备份**：改 GUI 前的完整快照见上面 22:50 那条记录（12 个文件、sha256 核对通过）。
+
+**下一步**：Step 5（收尾解耦：四个事件结构体搬出 `filter_driver.rs`、`TapSI/DownSI/UpSI` 通道合流）、
+Step 6（打包便携 ZIP + README 能力对照表）。
+
+---
+
+
 ## 附录 A：被否决的路线（一句话，防止重走）
 
 | 路线 | 否决原因 |
@@ -688,3 +741,6 @@ exit_reason 行     OK    exit_reason = config_read_failed
 | `smoke_llhook.py` | **便携后端端到端冒烟**（需人按提示操作）：键盘重放 / hold 层 / 鼠标拦截重放 / 键盘→鼠标输出。守卫三件套＝到点强杀 + 独立 DETACHED 看门狗 + 配置复制到 `%TEMP%`（不碰用户安装目录）。**启动前必须先用提问模式确认用户已在电脑前** |
 | `check_logging_step3.py` | **全自动**核对日志行：正常启动的六行 + 强杀后"无 exit_reason"读法 + 配置读失败的 `exit_reason`。用"注入一次滚轮"触发钩子回调（`mouse_edges` 先于注入判定自增），并把光标临时移到脚本自己的窗口上再还原 |
 | `doc_to_main.py` | 用 git 底层命令把文档提交到 main —— **本机 `git switch` 会毁工作区**（见 §10 事故记录），所以不切分支 |
+| `probe_backend_switch.py` | 后端开关 × 设备栏联动的**判据回归**：8 组真值表 + 控件 `state` + 文案归类 + 变量未被改写。假 self + 真 CTk 控件，快、不出窗口，rc 0/1 可进 CI |
+| `smoke_backend_switch_e2e.py` | **真 AnyKeyApp + 临时配置**：`backend` 字段的 4 组保存规则（含「驱动不可用时不覆盖意图」「灰 ≠ 清空」），并 md5 证明**用户真实配置未被改动** |
+| `check_tray_backend_arg.py` | **托盘 → 引擎的参数传递**：在 %TEMP% 造隔离沙箱（托盘/引擎副本 + 最小空映射配置），读引擎日志的 argv 行确认 `--backend=` 取值正确；两轮（llhook / 缺省） |
