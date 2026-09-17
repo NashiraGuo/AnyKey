@@ -53,7 +53,7 @@ AnyKeyInputEvent {
 }
 ```
 
-**这条也是"吞所有键"成立的原因**：驱动后端本来就是"拦截态下整设备入队并吞键"，管道再按**键名**逐个发 `Down/Up` 重放（`commit.rs:635/642` → `main.rs:480`）。所以两种后端语义一致，现有 109 项测试仍然有效。
+**这条也是"吞所有键"成立的原因**：驱动后端本来就是"拦截态下整设备入队并吞键"，管道再按**键名**逐个发 `Down/Up` 重放（`commit.rs:635/642` → `main.rs:480`）。所以两种后端语义一致，现有 110 项测试仍然有效。
 
 ⚠️ 已知保真度缺口：`KBDLLHOOKSTRUCT` 只有 `LLKHF_EXTENDED`（E0）位、**没有 E1 位**，所以 `ANYKEY_KEY_E1` 在便携模式下取不到值（受影响面待实测，见 §8）。
 
@@ -323,6 +323,26 @@ impl Backend {
 - `build/release.zip` 未被忽略（`.gitignore` 只忽略了 `build/release/` 目录和 `AnyKey_v*.zip`）→ 补 `build/*.zip`，避免它污染 `git status`、防止误提交。
 
 **下一步**：Step 0（`main.rs` 参数解析改全 argv 扫描 + 日志改追加模式）。
+
+### Step 0 —— 参数解析 + 日志追加（提交 `03d4e2a`，分支 `feat/portable-backend`）
+
+**做了什么**
+
+- `main.rs:185` 参数解析：`args.get(2).map_or(false, |a| a == "--debug")` → `args.iter().any(|a| a == "--debug")`，去掉位置依赖（这个隐患是：将来插入 `--backend=...` 会让 `--debug` 被静默丢掉、日志不再落盘且无报错）。
+- `main.rs:195` 日志打开：`create(true).write(true).truncate(true)` → `create(true).append(true)`。
+- 启动时写分隔横幅：`===== engine start <ts> =====` + `argv = [...]`（`ts_tag()` 提供墙钟 + QPC，与 `tools/keylatency` 同一时间基）。
+- `.gitignore` 补 `build/*.zip`（只在忽略规则里，见基线条目）。
+
+**验证**：`cargo build` 通过（17.67s）；`cargo test` **110 项全绿**（原文档写"109 项"，实测为 110，已就地修正）。
+
+**遇到的问题**
+
+- `cargo test` 期间刷出一批 `failed to garbage collect finalized incremental compilation session directory … 拒绝访问 (os error 5)`。是增量编译目录被占用（有进程锁着 `target/` 或杀软扫描），**不影响编译与测试结果**，本次不处理。
+- 本轮 shell 环境里 `ls/grep/tail/sed/cat` 等 coreutils 时有时无（`PATH` 被包装脚本影响），已改用 Python 做文件操作、`git` 直连——**后续脚本一律走 Python，不依赖 coreutils**。
+
+**为什么先做这一段**：它修的是现存隐患、不依赖任何新功能、行为影响面最小（只影响参数解析与日志），因此最适合用来验证整条"分支 + 分段提交 + 每段编译测试"的工作流本身是否顺。
+
+**下一步**：Step 1 —— `backend.rs`（`enum Backend` + 8 个薄方法，driver 变体先只包住现状；**要求行为完全不变**）+ 参数加 `--backend=driver|llhook`。
 
 ## 附录 A：被否决的路线（一句话，防止重走）
 
