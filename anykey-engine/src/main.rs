@@ -182,7 +182,9 @@ fn main() {
         return;
     }
     let config_path = &args[1];
-    let debug_enabled = args.get(2).map_or(false, |a| a == "--debug");
+    // 扫描全部参数，不依赖位置：旧写法 `args.get(2) == "--debug"` 只在第 3 个位置判断，
+    // 一旦参数顺序变化（例如将来插入 --backend=...）就会静默丢掉 --debug，且无任何报错。
+    let debug_enabled = args.iter().any(|a| a == "--debug");
 
     let log_path = std::path::Path::new(config_path)
         .parent().unwrap_or_else(|| std::path::Path::new("."))
@@ -192,12 +194,16 @@ fn main() {
 
     if debug_enabled {
         let mut guard = LOG_FILE.lock().unwrap();
-        *guard = match std::fs::OpenOptions::new().create(true).write(true).truncate(true).open(&log_path) {
+        // 追加模式（不是 truncate）：引擎启动恰好就是"应用配置变更"的那一刻，
+        // truncate 会把上一次运行的证据清空，事后无法对比"改之前 / 改之后"。
+        *guard = match std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
             Ok(f) => Some(f),
             Err(e) => { msgbox("AnyKey Engine [FLT]", &format!("Cannot create log:\n{}", e)); return; }
         };
     }
 
+    log!("===== engine start {} =====", ts_tag());
+    log!("argv = {:?}", args);
     log!("AnyKey Engine v0.1.0 [FLT]");
     log!("Config: {}", config_path);
 
