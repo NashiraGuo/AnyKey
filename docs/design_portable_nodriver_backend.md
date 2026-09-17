@@ -236,13 +236,15 @@ impl Backend {
 | **新增 `src/hook_input.rs`** | **`WH_KEYBOARD_LL` + `WH_MOUSE_LL` 两个钩子同线程安装**（§3.6 实测可共存）+ **专用线程消息泵**（`MsgWaitForMultipleObjectsEx` 模式，同 `app_sensor.rs:64/73-116`）；回调内：`code < 0` 或 `LLKHF_INJECTED`/`LLMHF_INJECTED` → 透传，否则按 §3.1 造事件推入**有界通道**（`try_send` 失败 → 直通降级 + 告警，**绝不在回调里等待**）；鼠标**移动**不进管道（与驱动「纯移动直接转发」一致）；投影逻辑写成纯函数便于单测 |
 | ✅ `src/hook_input.rs`（Step 6 补充） | **三个开关 + 一个纯判定**：`capture`（镜像入队）/ `swallow`（吞原事件）/ `accept_injected`（收下注入事件），由 `decide() -> {Pass, Mirror, Swallow}` 合成唯一判定；`HookOptions::production()` 与 `::for_test()` 是仅有的两种合法组合。原先「入队」与「吞键」焊在一起（A2），于是**无法只观察不吞** —— 而这正是自动化测试需要的能力。驱动后端一直有这个二分（`InterceptEnabled` / `CaptureEnabled`），所以这里是让两个后端对称，而不是为测试开特例 |
 | **新增 `src/sendinput_out.rs`** | 鼠标按键 / 滚轮 / 移动的 SendInput 实现；键盘直接转调 `emit.rs:101/120`；文本复用 `main.rs:736 send_unicode_text` |
-| `src/main.rs` | ① 参数解析改全 argv 扫描；② 启动按 §4.2 构造后端，把现有 ~10 处 `fd.*` 调用（`:229/238/244/255/330-339/587/602/732/854/917-923`）收敛到后端句柄之后；③ 输出出口分派（driver → IOCTL / llhook → SendInput）；④ 心跳线程（`:364`）在 llhook 模式下换成"钩子存活对账"（`GetLastInputInfo()` 与会话最后回调时间戳比对，前者推进而后者不动 = 钩子已被摘 → 重装 + 记日志）；⑤ 日志改追加（§6） |
+| `src/main.rs` | ① 参数解析改全 argv 扫描；② 启动按 §4.2 构造后端，把现有 ~10 处 `fd.*` 调用（`:229/238/244/255/330-339/587/602/732/854/917-923`）收敛到后端句柄之后；③ 输出出口分派（driver → IOCTL / llhook → SendInput）；④ 心跳线程（`:364`）在 llhook 模式下换成"钩子存活对账"（`GetLastInputInfo()` 与会话最后回调时间戳比对，前者推进而后者不动 = 钩子已被摘 → 记日志告警）；⑤ 日志改追加（§6） |
 | ✅ **新增 `src/events.rs`** | 两个后端共用的 I/O 词汇，**无 cfg** —— 详见 §5.4（Step 5） |
 | ✅ `src/registry.rs` | `scan_all` / `init` / `refresh` 已收 `&Backend`（Step 1）；本步把设备清单负载（`AnyKeyDeviceInfo` / `AnyKeyEnumDevicesRequest`）的 import 改指 `events`。llhook 侧返回单设备桩（device 0，同时标记键盘+鼠标） |
 | ✅ `src/emit.rs` | `MOUSE_*` 的 import 改指 `events`（Step 5） |
 | ✅ `src/state.rs`、`commit.rs` | `current_device` 初值 `1` → `0`；`emit_layer_act/deact` 的硬编码 `1` → `self.current_device`（Step 5，两处都只是「值不说谎」，行为无变化 —— 实测驱动会话 46900 行里真实输出恒为 `dev=4/5`，占位值从不出现） |
 | ✅ `src/app_sensor.rs` | 摘掉全部 4 处 `cfg(feature = "filter-driver")` 与 `#[cfg(not(…))]` 的 `None` 桩（Step 5）—— 它只用 `SetWinEventHook` + `GetForegroundWindow`，**本来就与后端无关**；per-app 覆盖在两个后端下走同一份代码 |
 | ⏸ `Cargo.toml`、`lib.rs` | **不加 `llhook-backend` feature、不做 cfg 分叉** —— 理由见 §5.4 末段 |
+
+> ⚠️ 上表 ④ 的**「重装钩子」部分未实现**：存活对账只写日志告警，没有重装逻辑。见 §10 Step 6 的遗留项。
 
 ### 5.2 托盘（✅ 已实施）
 
@@ -337,7 +339,7 @@ impl Backend {
 | Step 3 | 日志补齐（requested / fallback / **首次钩子回调** / exit_reason + 收尾横幅）。✅ 已做，提交见 §10；核对脚本 `tools/check_logging_step3.py`（全自动） |
 | Step 4 | 托盘传参（`config.rs` + `engine.rs`）+ GUI 开关 + 配置字段。✅ 已做，提交见 §10；验证脚本 3 个（见附录 B） |
 | Step 5 | 收尾解耦（`registry` / `app_sensor` / `emit` / `current_device`；四个事件结构体搬进 `src/events.rs`，两个新模块不再与 `filter-driver` 同 cfg）。✅ 已做，提交 `18447ad`，详见 §10 与 §5.4 |
-| Step 6 | 打包便携 ZIP（不含 `anykeyFilterDriver/` 与 `安装驱动.bat`）+ README 能力对照表 |
+| Step 6 | ~~打包便携 ZIP（不含 `anykeyFilterDriver/` 与 `安装驱动.bat`）~~ + README 能力对照表。**打包策略已改为「不分包」（用户决定，2026-09-18）**：发布包只出一种、全带三项 —— 没装驱动的用户直接用 `anykey/` 里的 GUI 即可（引擎自动回退便携模式），因此**不需要便携专用包**，`build_release_package.py` 无需改动。✅ README 对照表已补（中英双语，见 §10） |
 | **人工验证** | 每个涉及输入的步骤之后都要做一次**实机**冒烟（敲键盘确认映射生效）—— 自动化测试覆盖不到钩子本身。✅ 已完成一次（Step 2c）；**需要人配合时，启动前必须先用提问模式确认用户就在电脑前** |
 
 > **构建注意（本机环境，2026-09-17 实测）**：`cargo build` / `cargo test` 要把 target 移出工作区 ——
@@ -372,6 +374,7 @@ impl Backend {
 - **鼠标移动不接管**（高频事件走"吞 + 重放"是性能灾难）：便携模式下鼠标**移动**原样透传，
   只有**按键 / 滚轮**会被拦截重放 —— 这与驱动后端完全一致（驱动也是纯移动直接转发、不入管道）。
 - **鼠标按键/滚轮变成注入事件**：与键盘同理，过滤注入输入的软件可能不认。
+- **没有驱动内建的失控兜底**：4.1 的三层防护里，30s 心跳看门狗与紧急脱离快捷键（LCtrl+Space+Esc）都实现在驱动中，便携模式下不可用 —— `main.rs` 的心跳线程因打不开 `\\.\AnyKeyFlt` 句柄而直接 return（`:500-515`），llhook 路径下日志会写 `heartbeat/watchdog n/a`。它的安全边界由另外三条构成：钩子随进程退出自动卸载、钩子回调绝不阻塞（队列满则原样放行）、主循环做钩子存活对账并写日志告警。⚠️ **存活对账当前只告警、不重装钩子**（见 §10 遗留项）。
 
 ---
 
@@ -796,6 +799,38 @@ Step 6（打包便携 ZIP + README 能力对照表）。
 3. 「驱动注入无标记键」（原 §8 计划）这条前提仍未实测 —— 探针 `tools/probe_drv_inject_to_hook.py`
    已写好，但它要求驱动**不处于拦截态**（即先退出 AnyKey），而用户当时正在用 AnyKey，
    探针正确地拒绝了执行。现在自动化不再依赖这条路径，所以它降级为「可选复核」。
+
+### Step 6（完成）—— 打包策略定案 + README 能力对照表（2026-09-18）
+
+**用户决策：不做两个发布包。**「发布包里面带着完整的 anykey、驱动、安装脚本。用户没安装驱动那就直接用 anykey 也行。」
+
+⟹ 原计划的「便携 ZIP（不含 `anykeyFilterDriver/` 与安装脚本）」**取消**。核实 `build/build_release_package.py`（120 行）：它只组装 `anykey/` + `anykeyFilterDriver/` + `安装驱动.bat` 这一种结构，**已符合要求、无需改动**。理由自洽：没装驱动的用户直接跑 `anykey/anykey-gui.exe`，引擎按 `backend` 字段（或自动回退）走便携模式 —— 一条发布链覆盖两种运行方式。
+
+**README 能力对照表**（中英同步，各 +48/−4；改前 `llhook` 在两份 README 里**零命中**）
+
+| 位置 | 补的内容 |
+|---|---|
+| 新增 `## 两种运行模式`（置于「关于测试模式」之后，**不占编号**故不影响后续章节号与既有锚点） | 10 行能力对照表：前置条件 / 键位映射 / 鼠标 / 应用覆盖 / **多设备（便携 ❌）** / 提权窗口（便携 ❌）/ 与 AHK·espanso 共存（便携 ❌）/ 拒注入软件（便携 ⚠️）/ 内核级紧急脱离（便携 ❌）/ 延迟；另附「怎么选」（GUI 开关 + `backend` 字段 + `--backend=` 强制）与两条代价 |
+| `## 1. 核心功能特性` | 新增「免驱便携模式」一条 |
+| `## 2. 安装方法` | 提示：步骤 1–3 可整体跳过，直接运行 `anykey/anykey-gui.exe` |
+| `### 4.1 失控安全防护` | 表格下加注：后两层是驱动内建的，便携模式不可用 |
+| `#### 4.3.5 设备设置` | 加一条：便携模式下本节全不可用，**设置内容不会被清空** |
+| `## 6. 文件架构` | `src/` 补 `backend.rs` / `hook_input.rs` / `sendinput_out.rs` / `events.rs`；测试数 109 → 131 |
+| `## 8. 测试` | 中文 109 → 131，英文 73 → 131（**两版长期没跟上测试增长**） |
+| `## 9. 安全说明` | 补便携模式段落 |
+| `## 10. 文档` | 加本文档链接 |
+
+**为写准这几段而专门核实的事实**（此前只有印象、没有依据）：
+
+1. **心跳线程在便携模式下直接退出**：`main.rs:500-515` 打开 `\\.\AnyKeyFlt` 失败即打 `HEARTBEAT: …` 并 `return`；llhook 启动日志写 `heartbeat/watchdog n/a`（`:363`）。
+2. **紧急脱离快捷键（LCtrl+Space+Esc）不可用于便携模式**：它实现在驱动的 `ServiceCallback`（DISPATCH_LEVEL）。
+
+**校验**：两版 README 行尾仍为纯 LF（CRLF=0）；文档内全部 `](#锚点)` 均可解析；对照表两版均 12 行、列数一致。
+
+**顺带发现的两处「文档与实现不一致」**
+
+1. ⚠️ **§5.1 ④ 写的「钩子已被摘 → 重装 + 记日志」只实现了一半**：`main.rs:769-810` 的存活对账只更新 `liveness_healthy` 状态机并**打日志告警**（`SUSPECT` / `callbacks resumed`），**没有任何重装钩子的代码**（全仓搜 `重装|reinstall` 零命中）。低层钩子被系统静默摘除（如回调超时）后 AnyKey 不会自愈 —— **列为遗留项**，是否实现待定（属罕见路径，用户重启引擎即可恢复）。
+2. README 的测试项数长期未更新（中 109 / 英 73，实际 131）—— 已一并修正。
 
 ---
 
