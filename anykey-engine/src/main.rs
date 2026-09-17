@@ -18,8 +18,9 @@ use std::collections::HashSet;
 use std::collections::HashMap;
 
 #[cfg(feature = "filter-driver")]
+use anykey_engine::backend::Backend;
 use anykey_engine::filter_driver::{
-    FilterDriver, ANYKEY_FLAG_DEVICE_CHANGED, AnyKeyOutputEvent, AnyKeyMouseOutputEvent,
+    FilterDriver, AnyKeyOutputEvent, AnyKeyMouseOutputEvent,
     ANYKEY_KEY_BREAK, MouseEventTranslator,
 };
 
@@ -252,13 +253,18 @@ fn main() {
         Err(e) => log!("Drain warning: {}", e),
     }
 
+    // ── 后端抽象 ── 构造期（open / register_event / 首次排空）仍用具体的 FilterDriver；
+    // 此后所有 I/O 一律经 Backend 分派。免驱动后端只需在 backend.rs 里加一个变体。
+    let backend = Backend::Driver(fd);
+    log!("Backend: {}", backend.name());
+
     // ── 多设备匹配：registry + matcher → per-device contexts ──
     // v0.4: registry.init() comes BEFORE per-device intercept, so we know
     // which devices exist before subscribing. Default = all passthrough (safe).
     let mut matcher = Matcher::new();
     matcher.debug = debug_enabled;
     let mut subscribed_ids: HashSet<u32> = HashSet::new();
-    let descriptors: Vec<_> = if let Err(e) = registry.init(&fd) {
+    let descriptors: Vec<_> = if let Err(e) = registry.init(&backend) {
         log!("Registry scan: {} — using single-device fallback", e);
         Vec::new()
     } else {
@@ -333,12 +339,12 @@ fn main() {
     let mut mouse_translator = MouseEventTranslator::new();
     if !descriptors.is_empty() {
         // Ensure ALL devices start in passthrough (safe default)
-        if let Err(e) = fd.set_device_intercept(0, false) {
+        if let Err(e) = backend.set_intercept(0, false) {
             log!("set_device_intercept(all, false) warning: {}", e);
         }
         // Enable interception only for subscribed devices
         for &id in &subscribed_ids {
-            match fd.set_device_intercept(id, true) {
+            match backend.set_intercept(id, true) {
                 Ok(_) => log!("[intercept] device {} → INTERCEPT ON", id),
                 Err(e) => log!("[intercept] device {} FAILED: {}", id, e),
             }
@@ -386,7 +392,7 @@ fn main() {
         });
     }
 
-    let dev_count = fd.get_device_count().unwrap_or(0);
+    let dev_count = backend.device_count().unwrap_or(0);
     log!("Devices: {}", dev_count);
 
     //
@@ -427,7 +433,7 @@ fn main() {
             _ => fallback,
         }
     }
-    fn drain_emit_log_flt(pipeline: &mut PipelineState, fd: &FilterDriver, registry: &Registry, recent_kb_dev: u32, recent_mouse_dev: u32) {
+    fn drain_emit_log_flt(pipeline: &mut PipelineState, backend: &Backend, registry: &Registry, recent_kb_dev: u32, recent_mouse_dev: u32) {
         let mut safety = 0;
         loop {
             let debug_lines: Vec<_> = pipeline.debug_log.drain(..).collect();
@@ -441,7 +447,7 @@ fn main() {
                 // 同类型映射直接用 ev_dev；跨类型回退 0（驱动默认同类设备）。
                 // 见 drain_emit_log_flt 上方注释。
                 // ── 纯执行函数：发送单个键盘键 ──
-                fn send_key_event(fd: &FilterDriver, kn_lower: &str, target_dev: u32, is_down: bool, is_tap: bool) {
+                fn send_key_event(backend: &Backend, kn_lower: &str, target_dev: u32, is_down: bool, is_tap: bool) {
                     if let Some(sc) = key_name_to_scancode(kn_lower) {
                         let kind = if is_tap { "TAP" } else if is_down { "DN" } else { "UP" };
                         log!("  {} send(FLT): {} {} dev={}", ts_tag(), kind, kn_lower, target_dev);
@@ -450,17 +456,17 @@ fn main() {
                         if ext { flags |= 0x02; }
                         if !is_down { flags |= 0x01; }
                         let evt = AnyKeyOutputEvent { make_code: sc, flags, device_id: target_dev };
-                        if let Err(e) = fd.send_output(&evt) { log!("  send_output failed: {}", e); }
+                        if let Err(e) = backend.send_output(&evt) { log!("  send_output failed: {}", e); }
                         if is_tap {
                             let evt_up = AnyKeyOutputEvent { make_code: sc, flags: flags | 0x01, device_id: target_dev };
-                            let _ = fd.send_output(&evt_up);
+                            let _ = backend.send_output(&evt_up);
                         }
                     } else {
                         log!("  ERROR: key '{}' has no scancode — pipeline should have filtered it", kn_lower);
                     }
                 }
                 // ── 纯执行函数：发送鼠标事件 ──
-                fn send_mouse_event(fd: &FilterDriver, name: &str, target_dev: u32, is_down: bool) {
+                fn send_mouse_event(backend: &Backend, name: &str, target_dev: u32, is_down: bool) {
                     use anykey_engine::emit::mouse_name_to_flags;
                     if let Some((mflags, is_wheel)) = mouse_name_to_flags(name, is_down) {
                         log!("  {} send(FLT): MOUSE {} {} dev={}", ts_tag(), if is_down { "DN" } else { "UP" }, name, target_dev);
@@ -476,7 +482,7 @@ fn main() {
                                 _ => 0,
                             };
                         }
-                        if let Err(e) = fd.send_mouse_output(&mevt) { log!("  send_mouse_output failed: {}", e); }
+                        if let Err(e) = backend.send_mouse_output(&mevt) { log!("  send_mouse_output failed: {}", e); }
                     } else {
                         log!("  ERROR: mouse name '{}' not recognized — pipeline should have filtered it", name);
                     }
@@ -490,14 +496,14 @@ fn main() {
                         let is_down = matches!(event, EmitEvent::Down(_, _)) || is_tap;
                         let kn_clean = kn.trim_matches(|c: char| c=='{'||c=='}'||c.is_whitespace());
                         let kn_lower = kn_clean.to_lowercase();
-                        send_key_event(&fd, &kn_lower, target_dev, is_down, is_tap);
+                        send_key_event(backend, &kn_lower, target_dev, is_down, is_tap);
                     }
                     // ── 鼠标键：pipeline 已判断，此处纯执行 ──
                     EmitEvent::MouseDown(ref name, ev_dev) => {
-                        send_mouse_event(&fd, name, mouse_target_dev(registry, ev_dev, recent_mouse_dev), true);
+                        send_mouse_event(backend, name, mouse_target_dev(registry, ev_dev, recent_mouse_dev), true);
                     }
                     EmitEvent::MouseUp(ref name, ev_dev) => {
-                        send_mouse_event(&fd, name, mouse_target_dev(registry, ev_dev, recent_mouse_dev), false);
+                        send_mouse_event(backend, name, mouse_target_dev(registry, ev_dev, recent_mouse_dev), false);
                     }
                     // ── SI 变体（由 leader 发出）：扫描码→SendInput，无扫描码→Unicode ──
                     EmitEvent::TapSI(ref kn, _) | EmitEvent::DownSI(ref kn, _) | EmitEvent::UpSI(ref kn, _) => {
@@ -540,7 +546,7 @@ fn main() {
                             button_flags: 0, button_data: 0,
                             last_x: x, last_y: y,
                         };
-                        if let Err(e) = fd.send_mouse_output(&mevt) {
+                        if let Err(e) = backend.send_mouse_output(&mevt) {
                             log!("  send_mouse_output(MouseMove) failed: {}", e);
                         }
                     }
@@ -590,7 +596,7 @@ fn main() {
         pipeline.sync_tick_to_real_time();
         let timeout = pipeline.next_deadline_ms().unwrap_or(1000);
 
-        let (kb_events, ms_events) = match fd.poll_all(timeout) {
+        let (kb_events, ms_events) = match backend.poll_all(timeout) {
             Ok((kb, ms)) => (kb, ms),
             Err(e) => { log!("poll_all error: {}", e); break; }
         };
@@ -605,13 +611,12 @@ fn main() {
         // status auto-clears the one-shot flag in the driver. Guid-bearing
         // rules reconnect via GUID+HWID (stable across replug); guid-less
         // stale rules fall through to `auto_reconnect`. ──
-        match fd.get_status() {
-            Ok(st) => {
-                if st.flags & ANYKEY_FLAG_DEVICE_CHANGED != 0 {
+        match backend.device_changed() {
+            Ok(true) => {
                     log!("[hotplug] driver reported device change — re-matching");
-                    rematch(&mut pipeline, &mut manager, &mut matcher, &mut registry, &fd, debug_enabled);
-                }
+                    rematch(&mut pipeline, &mut manager, &mut matcher, &mut registry, &backend, debug_enabled);
             }
+            Ok(false) => {}
             Err(e) => log!("[hotplug] get_status failed: {}", e),
         }
 
@@ -656,7 +661,7 @@ fn main() {
                 TimerKind::SleepTimer => pipeline.fire_sleep_timer(&entry),
                 TimerKind::LeaderTimeout => pipeline.leader_timeout(),
             }
-            drain_emit_log_flt(&mut pipeline, &fd, &registry, recent_kb_dev, recent_mouse_dev);
+            drain_emit_log_flt(&mut pipeline, &backend, &registry, recent_kb_dev, recent_mouse_dev);
         }
 
         // Process keyboard input events
@@ -730,12 +735,12 @@ fn main() {
 
         let has_events = !kb_events.is_empty() || !ms_events.is_empty();
         if has_events || !first_input {
-            drain_emit_log_flt(&mut pipeline, &fd, &registry, recent_kb_dev, recent_mouse_dev);
+            drain_emit_log_flt(&mut pipeline, &backend, &registry, recent_kb_dev, recent_mouse_dev);
             if has_events { first_input = true; }
         }
     }
 
-    let _ = fd.set_device_intercept(0, false); // v0.4: disable all on shutdown
+    let _ = backend.set_intercept(0, false); // v0.4: disable all on shutdown
 }
 
 /// Send Unicode text via Windows SendInput (shared by both backends).
@@ -854,10 +859,10 @@ fn rematch(
     manager:  &mut RuntimeManager,
     matcher:  &mut Matcher,
     registry: &mut Registry,
-    fd:       &FilterDriver,
+    backend: &Backend,
     debug:    bool,
 ) {
-    let _ = registry.init(fd);
+    let _ = registry.init(backend);
     let descriptors: Vec<DeviceDescriptor> = registry.descriptors.values().cloned().collect();
     if debug {
         log!("[dev-scan] {} device(s) re-enumerated:", descriptors.len());
@@ -920,9 +925,9 @@ fn rematch(
 
     // v0.4: per-device intercept — update driver for matched devices
     // First disable all, then enable only subscribed ones
-    let _ = fd.set_device_intercept(0, false);
+    let _ = backend.set_intercept(0, false);
     for &id in &subscribed_ids {
-        match fd.set_device_intercept(id, true) {
+        match backend.set_intercept(id, true) {
             Ok(_) => log!("[rematch] device {} → INTERCEPT ON", id),
             Err(e) => log!("[rematch] device {} FAILED: {}", id, e),
         }

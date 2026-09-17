@@ -2,7 +2,8 @@
 //!
 //! Registry owns the device scan. It is output-only to Matcher.
 
-use crate::filter_driver::{FilterDriver, AnyKeyEnumDevicesRequest, AnyKeyDeviceInfo};
+use crate::backend::Backend;
+use crate::filter_driver::{AnyKeyEnumDevicesRequest, AnyKeyDeviceInfo};
 use std::collections::BTreeMap;
 
 // ── DeviceDescriptor — unified device identity (drv → registry, all modules use) ──
@@ -64,14 +65,14 @@ impl Registry {
     }
 
     /// Full scan via driver IOCTL.
-    pub fn scan_all(fd: &FilterDriver) -> Result<Vec<DeviceDescriptor>, String> {
+    pub fn scan_all(backend: &Backend) -> Result<Vec<DeviceDescriptor>, String> {
         let mut list = Vec::new();
         let mut index: u32 = 0;
         let mut buf: Vec<AnyKeyDeviceInfo> = vec![unsafe { std::mem::zeroed() }; 16];
 
         loop {
             let req = AnyKeyEnumDevicesRequest { index, max_count: 16 };
-            let count = fd.enum_devices(&req, &mut buf)?;
+            let count = backend.enum_devices(&req, &mut buf)?;
             if count == 0 { break; }
             for i in 0..count as usize {
                 list.push(DeviceDescriptor::from_driver_info(&buf[i]));
@@ -82,8 +83,8 @@ impl Registry {
     }
 
     /// Initialize from driver scan.
-    pub fn init(&mut self, fd: &FilterDriver) -> Result<(), String> {
-        let list = Self::scan_all(fd)?;
+    pub fn init(&mut self, backend: &Backend) -> Result<(), String> {
+        let list = Self::scan_all(backend)?;
         self.descriptors.clear();
         for d in list {
             self.descriptors.insert(d.runtime_device_id, d);
@@ -97,8 +98,8 @@ impl Registry {
     }
 
     /// Refresh after hotplug — returns changed/absent devices.
-    pub fn refresh(&mut self, fd: &FilterDriver) -> Result<Vec<DeviceChange>, String> {
-        let current = Self::scan_all(fd)?;
+    pub fn refresh(&mut self, backend: &Backend) -> Result<Vec<DeviceChange>, String> {
+        let current = Self::scan_all(backend)?;
         let mut changes = Vec::new();
 
         // Detect removals

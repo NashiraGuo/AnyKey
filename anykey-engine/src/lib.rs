@@ -4,6 +4,9 @@ pub mod util;
 pub mod pipeline;
 pub mod emit;
 #[cfg(feature = "filter-driver")]
+pub mod backend;
+
+#[cfg(feature = "filter-driver")]
 pub mod filter_driver;
 pub mod app_sensor;
 pub mod registry;
