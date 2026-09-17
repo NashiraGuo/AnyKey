@@ -26,6 +26,39 @@ Layers, combos, leader sequences, tap-dance — those are table stakes for any r
 
 Loading a driver the normal way requires Microsoft signing (an EV certificate plus WHQL certification). **It's too expensive, and I'm not paying for it right now.** So this version runs in **Windows Test Signing mode**, with a permanent watermark in the corner of your desktop; I'll look into proper signing when there's a real need for it. If that bothers you, read the [full installation notes](#2-installation) before deciding.
 
+**You don't have to pay that price either** — AnyKey also supports a **portable mode** that touches no driver at all. See the next section.
+
+---
+
+## Two Run Modes
+
+The release package ships both — **whether to install the driver is your call**. The engine picks one at startup based on the config:
+
+- **Driver mode** (default): interception and re-injection are handled by the custom kernel filter driver — the full form, with multi-device, multi-app, and per-device settings all available.
+- **Portable mode**: interception via the low-level Windows hooks (`WH_KEYBOARD_LL` / `WH_MOUSE_LL`), re-injection via `SendInput`. **No driver, no test signing, no Secure Boot changes, no reboot** — unzip and run.
+
+| | Driver mode (default) | Portable mode |
+| --- | --- | --- |
+| Prerequisites | Secure Boot off + test signing on + driver installed + reboot | **None** — unzip and go |
+| Remapping (Combo / TapDance / Layer / Leader / Defer / macros) | ✅ | ✅ |
+| Mouse button & wheel remapping | ✅ | ✅ |
+| Per-app (foreground window) overrides | ✅ | ✅ |
+| **Per-device settings** | ✅ | ❌ one mapping set for all keyboards |
+| Works inside elevated (UAC) windows | ✅ | ❌ (only if you start AnyKey as administrator) |
+| Coexists with other hook-based tools (AutoHotkey / espanso) | ✅ | ❌ they interfere with each other |
+| Software that rejects injected input (some anti-cheat, security controls) | ✅ driver injection is indistinguishable from physical keys | ⚠️ every keystroke is an injected event — may be ignored |
+| Kernel-level emergency escape hotkey (LCtrl+Space+Esc) | ✅ | ❌ see [4.1](#41-fail-safe-protection) |
+| Input latency | lower | one extra user-mode round trip per key |
+
+**How to choose**: the "Run mode" switch in the GUI's left column. **If the driver is unavailable, the switch is greyed out and states the reason** (not installed / installed but not loaded / test signing off), and the engine simply runs in portable mode. The choice is stored in the top-level `backend` field of the config (`driver` / `llhook`) and **takes effect after the engine restarts** (tray "Reload settings", or "Full exit" and start again). To force it, pass `--backend=llhook` on the engine command line.
+
+**Two costs of portable mode**, worth knowing up front:
+
+1. It turns **the whole keyboard** into "swallow and replay" — every keystroke is intercepted first and then sent back to the system as an injected event. So any software that **rejects injected input** (some game anti-cheat, banking security controls, hardened password fields) may never see your keys;
+2. It **cannot coexist with other LL hook tools** (AutoHotkey, espanso, hook features built into IMEs): whichever hook is installed last wins, showing up as dead hotkeys or double triggers.
+
+Portable mode also **lacks the last two of the three defenses described in 4.1** (the emergency escape hotkey and the 30s watchdog are both built into the driver). Its safety comes from three other things instead: the hook is removed automatically when the process exits (so no stuck keyboard is left behind), hook callbacks never block (when the queue is full the original key passes through), and the main loop cross-checks hook liveness and logs a warning.
+
 ---
 
 ## 1. Core Features
@@ -38,6 +71,7 @@ Loading a driver the normal way requires Microsoft signing (an EV certificate pl
 - **Macros**: `RUN:` (launch programs/URLs/files), `{Sleep N}` (non-blocking delay), `{Select N}`, `{KeyName N}` (repeat a key), `MouseMove(x, y)`
 - **Full mouse coverage**: 5 buttons into the pipeline (TD / Combo / layer switching); wheel and movement pass through
 - **Kernel driver**: UpperFilter input interception — no device-count limit, hot-plug & sleep friendly
+- **Driver-free portable mode**: works without installing the driver (low-level hook interception + SendInput re-injection); the trade-off is losing the per-device dimension — see the [comparison table](#two-run-modes)
 - **Device + application aware runtime**: different mappings per device/app; input state shared across devices by domain
 - **Device whitelist**: filter by VID/PID; non-whitelisted devices pass through completely untouched
 - **GUI configurator**: CustomTkinter graphical interface, WYSIWYG editing of the config
@@ -50,6 +84,8 @@ Loading a driver the normal way requires Microsoft signing (an EV certificate pl
 > ⚠️ **Important limitations — read before installing**: AnyKey's kernel driver **does not carry a Microsoft signing certificate** (signing is too expensive for now — see the note at the top), so it **can only load in Windows Test Signing mode**, and **Test Signing is mutually exclusive with Secure Boot — you must disable Secure Boot in UEFI first**. Once test mode is on, a "Test Mode" watermark stays on the bottom-right of the desktop; some virtualization-based security features (HVCI / Memory Integrity) will block unsigned driver loading — verify your machine's security configuration is compatible before enabling. Proceed only after understanding and accepting these risks.
 
 Get AnyKey one of two ways: download the release package (zip) from GitHub Releases and extract it anywhere, or clone the repository and build from source. **Except for the kernel driver, all components (GUI configurator, system tray, engine) are standalone executables — no installation needed.**
+
+> **Don't want to deal with the driver?** Steps 1–3 below can be skipped entirely — just run `anykey/anykey-gui.exe` and the engine will use **portable mode** (no driver, no test signing, no Secure Boot changes). The trade-offs (no per-device dimension, and a few others) are listed under [Two Run Modes](#two-run-modes).
 
 Structure after extracting the release package (these three items sit at the zip root):
 
@@ -117,6 +153,8 @@ AnyKey is an "input gateway" — if the engine/driver hangs, the whole keyboard 
 | Session | Engine process exits/gets killed | Kernel sees handle close → EvtFileCleanup → interception off immediately | `anykey_flt.c` |
 | Heartbeat | Engine heartbeat thread stalls (deadlock) | 30s without heartbeat IOCTL → emergency stop | `anykey_flt.c` + `main.rs` heartbeat thread (every 5s) |
 | **Emergency escape hotkey** | Main thread deadlocked but heartbeat still alive (no automatic layer fires) | Hardware-level combo, bypasses the engine entirely | Built into the filter driver |
+
+> **In portable mode**: the last two layers above are built into the driver and unavailable. See the end of [Two Run Modes](#two-run-modes) for what stands in their place.
 
 ### 4.2 System Tray
 
@@ -229,6 +267,7 @@ The device panel manages all connected keyboard/mouse devices:
 - **Device identification**: to find out which physical device is which, use identify — the driver enters pass-through capture mode (mirrors events, swallows nothing) while you press a few keys on the target keyboard to locate it.
 - Some keyboards/mice expose multiple device names, and Windows has its own virtual devices — expect a few extra entries in the list.
 - Devices with existing mappings or an alias stay in the list even when unplugged, sorted to the end. To remove one completely, clear its mappings and delete its alias.
+- **All of this is unavailable in portable mode**: hooks cannot see device identity (a Windows user-mode limitation). The "per-device settings" switch is then disabled with an explanation — **your settings are not erased**, and everything comes back when you switch to the driver backend.
 
 #### 4.3.6 App Settings
 
@@ -358,7 +397,9 @@ AnyKey/
 │   └── config.py          Config model & key-name normalization (single source of normalization)
 ├── anykey-engine/         Rust engine (backend core)
 │   ├── src/               Pipeline phases 0-7 / Up1-8, Combo/TD/Layer/Leader/Defer
-│   └── tests/             Integration tests (109 unit + scenario tests)
+│   │                      backend.rs (backend seam: driver / portable) · hook_input.rs + sendinput_out.rs (portable backend)
+│   │                      events.rs (shared event definitions) · filter_driver.rs (driver protocol)
+│   └── tests/             Integration tests (131 unit + scenario tests)
 ├── anykey-tray/           Rust system tray (engine lifecycle / IPC / autostart)
 ├── anykey-filter-driver/  C kernel filter driver (WDK)
 │   ├── sys/               Driver source (anykey_flt.c / rawpdo.c / public.h)
@@ -370,7 +411,7 @@ AnyKey/
 │   ├── build_driver_release.py / build_engine_release.py / build_tray_release.py
 │   ├── build_release_package.py   Release package assembly + zip
 │   └── anykey.spec        PyInstaller config
-├── docs/                  Design docs (DESIGN.md / architecture svg)
+├── docs/                  Design docs (DESIGN.md / portable backend design / architecture svg)
 ├── CODEMAP.md             Code map: structure index for code readers
 ├── engines/rust/          Engine exe deployment location (build artifact, loaded by GUI)
 ├── scripts/               Helper scripts (test scenario generation etc.)
@@ -385,7 +426,7 @@ AnyKey/
 1. `anykey_config.json` is the single source of truth shared by GUI / Tray / Engine.
 2. Key-name normalization happens only in the GUI (`lib/config.py`); the engine treats it as a defensive layer only.
 3. Driver IOCTLs/structs are byte-for-byte aligned across three implementations: `public.h`(C) ↔ `filter_driver.rs`(Rust) ↔ `driver.py`(Python).
-4. GUI and Tray are separate processes talking over IPC; the Engine is a separate Rust process talking to the kernel through the Filter Driver.
+4. GUI and Tray are separate processes talking over IPC; the Engine is a separate Rust process — in driver mode it talks to the kernel through the Filter Driver, in portable mode it works directly through low-level hooks + SendInput (`backend.rs` is the single dispatch point for both).
 
 ---
 
@@ -454,7 +495,7 @@ python -m gui.main             # launch the configurator
 
 ## 8. Testing
 
-- Rust engine: `cargo test` (73 unit + scenario tests, including integration tests in `tests/`)
+- Rust engine: `cargo test` (131 unit + scenario tests, including integration tests in `tests/`)
 - Python: config parsing tests under `tests/`
 
 ---
@@ -467,12 +508,15 @@ python -m gui.main             # launch the configurator
 
 **Fail-safes**: three layers (process-exit Session interception-off / 30s heartbeat watchdog / kernel-level LCtrl+Space+Esc emergency escape) — see 4.1.
 
+**Portable mode**: loads no kernel component at all — everything happens inside your own process, still with no telemetry and no network. Note that its keystrokes are all sent back as injected events, which some software may ignore — see [Two Run Modes](#two-run-modes).
+
 ---
 
 ## 10. Documentation
 
 - Design rationale: [`docs/DESIGN.md`](docs/DESIGN.md) — motivation and key decisions behind each core feature
 - Code map: root-level [`CODEMAP.md`](CODEMAP.md) + [`docs/code_map_arch.svg`](docs/code_map_arch.svg) — module breakdown and data flow (a structure index for code readers)
+- Driver-free backend: [`docs/design_portable_nodriver_backend.md`](docs/design_portable_nodriver_backend.md) — the full design of portable mode (including rejected approaches and empirical findings, so nobody re-walks that path)
 
 ---
 
