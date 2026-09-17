@@ -297,11 +297,12 @@ impl Backend {
 | **Step 0** | `main.rs` 参数解析改全 argv 扫描（修 `--debug` 被静默丢掉的隐患）+ 日志改追加。**先做的理由**：修的是现存隐患，不依赖任何新功能，风险最低。✅ 已做，提交 `03d4e2a` |
 | Step 1 | `backend.rs`：`enum Backend` + 薄方法，**行为完全不变**（等价重构）。✅ 已做，提交 `b85762c` |
 | Step 2 | `hook_input.rs`（键盘+鼠标两个钩子 + 消息泵 + 有界通道 + 1:1 投影）+ `sendinput_out.rs`（鼠标输出）+ `Backend::LlHook` 变体 + `--backend=` 参数与引擎内回退。✅ 已做，提交 `78a5e39` / `b16c231` |
+| **Step 2c** | **实机冒烟测试**（`tools/smoke_llhook.py`）：键盘重放 / hold 层 / 鼠标拦截重放 / 键盘→鼠标输出，四项全通。✅ 已做（见 §10） |
 | Step 3 | 日志补齐（requested / fallback / **首次钩子回调** / exit_reason） |
 | Step 4 | 托盘传参 + GUI 开关 + 配置字段 |
 | Step 5 | 收尾解耦（`registry` / `app_sensor` / `emit` / `current_device`；并把四个事件结构体从 `filter_driver.rs` 搬进中性模块，使两个新模块不再与 `filter-driver` 同 cfg） |
 | Step 6 | 打包便携 ZIP（不含 `anykeyFilterDriver/` 与 `安装驱动.bat`）+ README 能力对照表 |
-| **人工验证** | 每个涉及输入的步骤之后都要做一次**实机**冒烟（敲键盘确认映射生效）—— 自动化测试覆盖不到钩子本身 |
+| **人工验证** | 每个涉及输入的步骤之后都要做一次**实机**冒烟（敲键盘确认映射生效）—— 自动化测试覆盖不到钩子本身。✅ 已完成一次（Step 2c）；**需要人配合时，启动前必须先用提问模式确认用户就在电脑前** |
 
 > **构建注意（本机环境，2026-09-17 实测）**：`cargo build` / `cargo test` 要把 target 移出工作区 ——
 > `CARGO_TARGET_DIR=C:/Users/proje/AppData/Local/Temp/<name> cargo test`。否则**在工作区内链接可执行文件会死锁**
@@ -542,6 +543,43 @@ update-ref refs/heads/main <commit> # 移动 main 指针
 1. **一次只跑一条 git 命令，不链式**（链式一旦中断，症状是"目录消失 + 陈旧锁"，排查成本高）。
 2. **任何"会删除工作区文件"的 git 操作在这台机器上都按危险操作对待** —— `git switch` 也要算进去，不只是 `git rm`。
 3. 用脚本改写文件时**保留或归一化行尾**；`git diff` 与 `git status/switch` 对 CRLF 的判定不一致，不能只看其中一个。
+
+### Step 2c —— 实机冒烟测试通过：免驱动后端端到端可用（2026-09-17 22:31）
+
+**测试方式**：`AnyKey/tools/smoke_llhook.py`（守卫脚本：到点强杀引擎 + 独立看门狗兜底），
+以**调试构建 + 临时配置副本**启动 `--backend=llhook`，90 秒内按提示完成 4 步。
+配置是复制到 `%TEMP%\anykey-smoke\` 的，用户的真配置与安装目录一个字未动。
+
+**日志侧证据**（本次会话 4003 行）：
+
+| 步骤 | 日志证据 | 结果 |
+|---|---|---|
+| ① 在记事本打 `hello world` | `in: DN/UP h,e,l,l,o…` 共 94 条输入；键盘重放 68 条 | ✅ |
+| ② 按住空格 0.5s → 按 `q` | `[SEND] releaseKey physical=q` / `EmitUp: 1` → `send(FLT): DN 1` / `UP 1` | ✅ 输出 `1` |
+| ③ 鼠标左键点击 + 滚轮 | 70 条 `mouse:` 输入；84 条 `send(FLT): MOUSE …`（`mouseleft` DN/UP、`wheeldown`×4、`wheelup`×5） | ✅ |
+| ④ 按住 ` 1s → 按 `o` | `[LEADER] record phys=o logical={mouseright}` → `EmitMouseDown: mouseright` → `send(FLT): MOUSE DN/UP mouseright` | ✅ |
+
+**用户目视确认**（四项全部正常）：打字无异常、出现 `1`、鼠标点击与滚轮正常、光标处弹出右键菜单。
+
+**顺带验证到的**：
+- 两后端输出**逐条同形**：llhook 的 `send(FLT): DN/UP <键名> dev=0` 与驱动后端一致；
+  鼠标输入 `flg=0x00(rel) dx=0 dy=0 (raw x=0 y=0)` 与驱动给引擎的事件完全一致。
+- **0 条 WARN / 0 条 ERROR / 0 条发送失败**。
+- 存活对账误报已修（见下）：上一轮 90 秒内会打 `WARN … 键盘钩子已 23031ms 无回调`，本轮没有。
+
+**本轮修掉的真 bug**（冒烟测试的主要收获）：
+第 1 轮出现 `WARN llhook: 系统侧有输入但键盘钩子已 23031ms 无回调 (kb_callbacks=42 mouse_edges=0 mouse_moves=722)`：
+根因是 `last_cb_tick` **只在键盘入队成功时更新**，而 `GetLastInputInfo` 对**鼠标活动**也推进 ——
+于是"只动鼠标、不打字"被误判成"钩子被摘除"。修法：**两个钩子都在回调入口就更新心跳**
+（含鼠标移动的透传路径），此后 `kb_callbacks` 仅是统计量、不再参与判定。
+
+**两个流程教训（已写进 `windows-input-chain-verify` 技能）**：
+1. 提示条**只把文字写在窗口标题**（900px 窄条）→ 长句被截断，用户看不到指令。
+   要么把指令放进聊天消息，要么用 GDI 画在客户区；本轮采用"缩短标题 + 完整指令放消息里"。
+2. **需要人配合的测试，启动前必须先用提问模式确认用户已在电脑前**。
+   本轮有一次（`--plan fn3mouse`）就是默默启动、用户不在场，整轮 `kb_callbacks=0` 白跑一次。
+
+---
 
 ## 附录 A：被否决的路线（一句话，防止重走）
 
