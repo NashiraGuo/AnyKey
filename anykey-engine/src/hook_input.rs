@@ -372,6 +372,8 @@ pub struct HookLiveness {
     pub mouse_edges: u64,
     pub mouse_moves: u64,
     pub since_last_cb_ms: u32,
+    /// 钩子安装至今的毫秒数 —— 用来判断"首次回调"来得有多快（装上≠收得到）。
+    pub since_install_ms: u32,
     pub system_idle_ms: u32,
     pub passthrough: u64,
     /// false = "系统侧有输入，而本钩子长时间没有回调"——可能是钩子被摘除，
@@ -484,24 +486,23 @@ impl HookInput {
     /// 的独立见证（实测验证过，见 tools/probe_elev_hook2.py）。
     pub fn liveness(&self) -> HookLiveness {
         let now = unsafe { GetTickCount() };
-        let (callbacks, mouse_edges, mouse_moves, passthrough, baseline) = match SHARED.get() {
-            Some(sh) => {
-                let last = sh.last_cb_tick.load(Ordering::Relaxed);
-                let base = if last != 0 {
-                    last
-                } else {
-                    sh.install_tick.load(Ordering::Relaxed)
-                };
-                (
-                    sh.callbacks.load(Ordering::Relaxed),
-                    sh.mouse_edges.load(Ordering::Relaxed),
-                    sh.mouse_moves.load(Ordering::Relaxed),
-                    sh.passthrough.load(Ordering::Relaxed),
-                    base,
-                )
-            }
-            None => (0, 0, 0, 0, now),
-        };
+        let (callbacks, mouse_edges, mouse_moves, passthrough, baseline, install) =
+            match SHARED.get() {
+                Some(sh) => {
+                    let install = sh.install_tick.load(Ordering::Relaxed);
+                    let last = sh.last_cb_tick.load(Ordering::Relaxed);
+                    let base = if last != 0 { last } else { install };
+                    (
+                        sh.callbacks.load(Ordering::Relaxed),
+                        sh.mouse_edges.load(Ordering::Relaxed),
+                        sh.mouse_moves.load(Ordering::Relaxed),
+                        sh.passthrough.load(Ordering::Relaxed),
+                        base,
+                        install,
+                    )
+                }
+                None => (0, 0, 0, 0, now, now),
+            };
         let since_last_cb_ms = now.wrapping_sub(baseline);
         let system_idle_ms = system_idle_ms(now);
         // 系统侧输入的"年龄"比我们的静默时长更小 → 那次输入没经过本钩子。
@@ -511,6 +512,7 @@ impl HookInput {
             mouse_edges,
             mouse_moves,
             since_last_cb_ms,
+            since_install_ms: now.wrapping_sub(install),
             system_idle_ms,
             passthrough,
             healthy: !(missed && since_last_cb_ms > HOOK_SILENT_LIMIT_MS),

@@ -80,7 +80,6 @@ fn msgbox(_title: &str, _msg: &str) {}
 
 // ── scancode → key name (shared by all backends) ──
 #[cfg(feature = "filter-driver")]
-#[cfg(feature = "filter-driver")]
 const KEY_E0: u16 = 0x02;
 #[cfg(feature = "filter-driver")]
 const KEY_E1: u16 = 0x04;
@@ -227,9 +226,25 @@ fn main() {
          backend_pref.name(),
          if backend_arg.is_some() { "argv" } else { "缺省" });
 
+    // 统一的退出原因记录。日志是**唯一**诊断来源（托盘不写日志、界面也看不到），
+    // 所以每一条"引擎要退出"的路径都必须留下一行 —— 否则事后只能看到日志断在这里。
+    // `code = None` 表示正常返回（退出码 0）。
+    // 注意：日志打开之前的退出（缺参数、日志文件建不出来）无法记录，只能靠弹窗。
+    fn log_exit(reason: &str, code: Option<i32>) {
+        match code {
+            Some(c) => log!("exit_reason = {} (exit code = {})", reason, c),
+            None => log!("exit_reason = {}", reason),
+        }
+    }
+
     let json = match std::fs::read_to_string(config_path) {
         Ok(s) => { log!("Config loaded: {} bytes", s.len()); s }
-        Err(e) => { log!("Cannot read config: {}", e); msgbox("AnyKey Engine [FLT]", &format!("Cannot read config:\n{}", e)); return; }
+        Err(e) => {
+            log!("Cannot read config: {}", e);
+            log_exit("config_read_failed", None);
+            msgbox("AnyKey Engine [FLT]", &format!("Cannot read config:\n{}", e));
+            return;
+        }
     };
     let config: Config = match serde_json::from_str::<Config>(&json) {
         Ok(c) => {
@@ -238,7 +253,12 @@ fn main() {
                 c.layers.layer_maps.len());
             c
         }
-        Err(e) => { log!("Invalid config: {}", e); msgbox("AnyKey Engine [FLT]", &format!("Invalid config:\n{}", e)); return; }
+        Err(e) => {
+            log!("Invalid config: {}", e);
+            log_exit("config_invalid", None);
+            msgbox("AnyKey Engine [FLT]", &format!("Invalid config:\n{}", e));
+            return;
+        }
     };
 
     let mut pipeline = PipelineState::new(config);
@@ -353,6 +373,8 @@ fn main() {
                     } else {
                         log!("ERROR driver was not attempted (--backend=llhook)");
                     }
+                    // 先落盘再弹窗：msgbox 是模态的，会把进程卡在这里，日志必须先写出去。
+                    log_exit("no_backend_available", Some(1));
                     msgbox("AnyKey Engine [FLT]",
                            &format!("Failed to start any input backend.\n\ndriver: {}\nllhook: {}",
                                     driver_fail.as_deref().unwrap_or("not attempted"), e));
@@ -712,13 +734,19 @@ fn main() {
     let mut last_liveness_check = std::time::Instant::now();
     let mut liveness_healthy: Option<bool> = None;
     let mut last_unhealthy_log: Option<std::time::Instant> = None;
+    // 首次钩子回调只打一次 —— 是本后端"钩子真的在工作"的唯一直接证据。
+    let mut first_cb_logged = false;
     loop {
         pipeline.sync_tick_to_real_time();
         let timeout = pipeline.next_deadline_ms().unwrap_or(1000);
 
         let (kb_events, ms_events) = match backend.poll_all(timeout) {
             Ok((kb, ms)) => (kb, ms),
-            Err(e) => { log!("poll_all error: {}", e); break; }
+            Err(e) => {
+                log!("poll_all error: {}", e);
+                log_exit(&format!("poll_all_failed: {}", e), None);
+                break;
+            }
         };
 
         pipeline.sync_tick_to_real_time();
@@ -743,6 +771,15 @@ fn main() {
         // ── 存活对账（llhook）：用 GetLastInputInfo 这个"不经过本钩子"的独立见证，
         // 判断"系统侧有输入、而本钩子长时间没有回调"。驱动后端返回 None，直接跳过。──
         if let Some(l) = backend.liveness() {
+            // **首次收到钩子回调** = 钩子确实活着。这一步必须单独记：`SetWindowsHookExW`
+            // 返回成功只说明"装上了"，不代表"收得到"（本项目实测：未提权时发往提权窗口的
+            // 按键根本不到钩子，而钩子自身完全正常）。
+            // 只在主循环里判、**绝不在回调里写日志** —— 回调必须极快，否则会被系统摘除。
+            if !first_cb_logged && (l.callbacks > 0 || l.mouse_edges > 0) {
+                first_cb_logged = true;
+                log!("llhook: first hook callback received (kb_callbacks={} mouse_edges={}, {}ms after install)",
+                     l.callbacks, l.mouse_edges, l.since_install_ms);
+            }
             if last_liveness_check.elapsed() >= std::time::Duration::from_secs(3) {
                 last_liveness_check = std::time::Instant::now();
                 match liveness_healthy {
@@ -898,6 +935,11 @@ fn main() {
     // 免驱动后端：这是空操作 —— 它的闸门就是钩子本身，`HookInput::drop` 会
     // 先撤吞键开关、再 UnhookWindowsHookEx，然后在途按键立即恢复原生。
     let _ = backend.set_intercept(0, false);
+
+    // 收尾横幅。**读法**：日志尾部有 exit_reason + stop 两行 = 引擎自己退出的
+    // （原因在 exit_reason 行里）；**只有 stop 没有 exit_reason 是不可能的**；
+    // 两行都没有 = 进程被外部强杀（托盘 taskkill / 任务管理器），属预期路径。
+    log!("===== engine stop {} (backend={}) =====", ts_tag(), backend.name());
 }
 
 /// Send Unicode text via Windows SendInput (shared by both backends).
