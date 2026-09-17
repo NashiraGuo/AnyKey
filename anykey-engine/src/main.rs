@@ -18,7 +18,8 @@ use std::collections::HashSet;
 use std::collections::HashMap;
 
 #[cfg(feature = "filter-driver")]
-use anykey_engine::backend::Backend;
+use anykey_engine::backend::{choose_backend, parse_backend_kind, Backend, BackendKind};
+use anykey_engine::hook_input::HookInput;
 use anykey_engine::filter_driver::{
     FilterDriver, AnyKeyOutputEvent, AnyKeyMouseOutputEvent,
     ANYKEY_KEY_BREAK, MouseEventTranslator,
@@ -187,6 +188,17 @@ fn main() {
     // 一旦参数顺序变化（例如将来插入 --backend=...）就会静默丢掉 --debug，且无任何报错。
     let debug_enabled = args.iter().any(|a| a == "--debug");
 
+    // 后端选择：`--backend=driver|llhook`，缺省 driver（= 保持现状行为）。
+    // 与 --debug 同理，必须扫描全部 argv，不能依赖参数位置。
+    let backend_arg = args.iter().find_map(|a| a.strip_prefix("--backend="));
+    let backend_pref: BackendKind = match backend_arg.and_then(parse_backend_kind) {
+        Some(k) => k,
+        None => BackendKind::Driver,
+    };
+    // 未知取值单独记一笔（下面是"解析失败但仍在跑"，不是"解析成功"）。
+    let backend_arg_unknown: Option<&str> =
+        backend_arg.filter(|v| parse_backend_kind(v).is_none());
+
     let log_path = std::path::Path::new(config_path)
         .parent().unwrap_or_else(|| std::path::Path::new("."))
         .join("anykey_engine.log")
@@ -207,6 +219,13 @@ fn main() {
     log!("argv = {:?}", args);
     log!("AnyKey Engine v0.1.0 [FLT]");
     log!("Config: {}", config_path);
+    match backend_arg_unknown {
+        Some(v) => log!("WARN unknown --backend={:?} (expected driver|llhook) — using driver", v),
+        None => {}
+    }
+    log!("backend requested = {} (来源: {})",
+         backend_pref.name(),
+         if backend_arg.is_some() { "argv" } else { "缺省" });
 
     let json = match std::fs::read_to_string(config_path) {
         Ok(s) => { log!("Config loaded: {} bytes", s.len()); s }
@@ -233,30 +252,124 @@ fn main() {
     // ── 多设备集成：registry + matcher → per-device contexts ──
     let mut registry = Registry::new();
 
-    let mut fd = match FilterDriver::open() {
-        Ok(f) => { log!("Filter driver opened"); f }
-        Err(e) => {
-            log!("Filter driver FAILED: {}", e);
-            msgbox("AnyKey Engine [FLT]", &format!("Failed to open filter driver:\n{}\n\nEnsure the driver is installed (run Install_AnyKey_Filter.bat).", e));
-            return;
+    // ══════════════════════════════════════════════════════════════
+    // 后端构造 —— 顺序本身是正确性的一部分（设计文档 §4.2）
+    //
+    // 唯一硬约束：**回退到 llhook 之前，驱动后端必须已彻底拆掉**。
+    // 驱动拦截与钩子吞键同时存在 = 双重吞键 = 丢键。所以这里只有两个出口：
+    // 要么用 Driver，要么 Driver 已被 drop（关句柄 → 驱动 EvtFileCleanup 清零拦截）后再装钩子。
+    // ══════════════════════════════════════════════════════════════
+
+    /// 打开驱动并注册事件；失败按 (重试次数, 间隔) 重试。
+    /// 为什么要重试：开机时托盘可能早于驱动服务启动，不重试会把"还没起来"误判成
+    /// "不可用"，于是整场会话跑在 llhook 上（per-device 静默失效）。代价只落在失败路径。
+    fn open_driver_with_retry(retries: u32, delay_ms: u64) -> Result<FilterDriver, String> {
+        let mut last = String::from("unknown");
+        for attempt in 0..=retries {
+            match FilterDriver::open() {
+                Ok(mut fd) => {
+                    if attempt == 0 { log!("driver: CreateFile -> OK"); }
+                    else { log!("driver: CreateFile -> OK (retry {}/{})", attempt, retries); }
+                    return match fd.register_event() {
+                        Ok(_) => { log!("driver: register_event -> OK"); Ok(fd) }
+                        Err(e) => Err(format!("register_event failed: {}", e)),
+                    };
+                }
+                Err(e) => {
+                    last = e;
+                    if attempt < retries {
+                        log!("driver: CreateFile -> FAILED ({}) — retry {}/{} in {}ms",
+                             last, attempt + 1, retries, delay_ms);
+                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    } else {
+                        log!("driver: CreateFile -> FAILED ({}) — no retries left", last);
+                    }
+                }
+            }
+        }
+        Err(last)
+    }
+
+    // `choose_backend` 是纯函数（backend.rs 有单测）。第一次调用表达"假设驱动可用"；
+    // 实际构造失败后再调一次表达"驱动不可用"→ 得到回退结果。规则只有一条：
+    // 请求 llhook 恒 llhook；请求 driver 且不可用则回退 llhook（不退出、不回报托盘）。
+    let mut planned: BackendKind = choose_backend(backend_pref, true);
+    let mut driver_fd: Option<FilterDriver> = None;
+    let mut driver_fail: Option<String> = None;
+
+    if planned == BackendKind::Driver {
+        match open_driver_with_retry(2, 500) {
+            Ok(fd) => {
+                // armed 探测：open 成功不等于"拦截开关能下发"。
+                // 探测成功后立刻复位为"全部透传"，避免在 registry 扫描前留下
+                // "所有设备都被拦截"的窗口（那不是我们想要的默认态）。
+                match fd.set_device_intercept(0, true) {
+                    Ok(_) => {
+                        let _ = fd.set_device_intercept(0, false);
+                        log!("driver: set_device_intercept probe -> OK");
+                        // 排空启动前积压的事件
+                        match fd.poll_input() {
+                            Ok(v) => log!("Stale events drained: {}", v.len()),
+                            Err(e) => log!("Drain warning: {}", e),
+                        }
+                        driver_fd = Some(fd);
+                    }
+                    Err(e) => {
+                        // 先 drop 驱动后端（关句柄 → 驱动 EvtFileCleanup 立刻清零拦截态），
+                        // 再允许回退。
+                        drop(fd);
+                        driver_fail = Some(format!("set_device_intercept failed: {}", e));
+                        planned = choose_backend(backend_pref, false);
+                    }
+                }
+            }
+            Err(e) => {
+                driver_fail = Some(e);
+                planned = choose_backend(backend_pref, false);
+            }
+        }
+    }
+
+    let backend: Backend = match planned {
+        BackendKind::Driver => {
+            Backend::Driver(driver_fd.expect("planned=Driver implies driver_fd is Some"))
+        }
+        BackendKind::LlHook => {
+            if backend_pref == BackendKind::Driver {
+                log!("WARN fallback -> llhook (driver unavailable, last err={})",
+                     driver_fail.as_deref().unwrap_or("unknown"));
+            }
+            match HookInput::install() {
+                Ok(h) => {
+                    log!("llhook: SetWindowsHookExW(WH_KEYBOARD_LL) -> OK");
+                    log!("llhook: message pump thread started (heartbeat/watchdog n/a; \
+                          main loop 用钩子存活对账替代)");
+                    Backend::LlHook(h)
+                }
+                Err(e) => {
+                    log!("ERROR llhook install failed: {}", e);
+                    if let Some(df) = &driver_fail {
+                        log!("ERROR driver was also unavailable: {}", df);
+                    } else {
+                        log!("ERROR driver was not attempted (--backend=llhook)");
+                    }
+                    msgbox("AnyKey Engine [FLT]",
+                           &format!("Failed to start any input backend.\n\ndriver: {}\nllhook: {}",
+                                    driver_fail.as_deref().unwrap_or("not attempted"), e));
+                    std::process::exit(1);
+                }
+            }
         }
     };
-
-    match fd.register_event() {
-        Ok(_) => log!("Event registered"),
-        Err(e) => { log!("register_event FAILED: {}", e); msgbox("AnyKey Engine [FLT]", &format!("Event registration failed:\n{}", e)); return; }
-    }
-
-    // Drain stale events that accumulated before engine started
-    match fd.poll_input() {
-        Ok(v) => log!("Stale events drained: {}", v.len()),
-        Err(e) => log!("Drain warning: {}", e),
-    }
-
-    // ── 后端抽象 ── 构造期（open / register_event / 首次排空）仍用具体的 FilterDriver；
-    // 此后所有 I/O 一律经 Backend 分派。免驱动后端只需在 backend.rs 里加一个变体。
-    let backend = Backend::Driver(fd);
     log!("Backend: {}", backend.name());
+
+    // 便携模式没有设备维度：强制按"全局映射"构建，**只改内存副本、不写回配置文件**。
+    // 否则若用户配置里 perDevice=true 且订阅的是真实设备（guid / VID:PID），伪设备 0
+    // 不在订阅集里 → 拿到空映射（纯透传）→ 表现为"什么映射都不生效"。
+    if planned == BackendKind::LlHook && pipeline.config.per_device {
+        log!("llhook: perDevice=true 与便携模式无设备维度冲突 → 本次按全局映射构建（配置未改写）");
+        pipeline.config.per_device = false;
+    }
 
     // ── 多设备匹配：registry + matcher → per-device contexts ──
     // v0.4: registry.init() comes BEFORE per-device intercept, so we know
@@ -371,7 +484,9 @@ fn main() {
     // emergency shutdown (flush queues, release modifiers, disable intercept).
     use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
     let heartbeat_running = Arc::new(AtomicBool::new(true));
-    {
+    // 心跳 IOCTL 是驱动专属；llhook 模式下没有驱动可打，存活检查由 main loop 的
+    // 钩子存活对账承担（见下方 liveness）。此处若强行启动只会每 5s 打一行错误。
+    if planned == BackendKind::Driver {
         let running = heartbeat_running.clone();
         std::thread::spawn(move || {
             // Open separate handle for heartbeat — isolated from input thread
@@ -592,6 +707,11 @@ fn main() {
     if debug_enabled {
         log!("[device] recent_kb_dev={} recent_mouse_dev={}", recent_kb_dev, recent_mouse_dev);
     }
+    // ── 后端存活对账状态（仅免驱动后端用；驱动后端由心跳线程 + 驱动看门狗负责）──
+    // 复用 main loop 自身的节拍（`timeout` 上限 1000ms），不新开线程。
+    let mut last_liveness_check = std::time::Instant::now();
+    let mut liveness_healthy: Option<bool> = None;
+    let mut last_unhealthy_log: Option<std::time::Instant> = None;
     loop {
         pipeline.sync_tick_to_real_time();
         let timeout = pipeline.next_deadline_ms().unwrap_or(1000);
@@ -618,6 +738,37 @@ fn main() {
             }
             Ok(false) => {}
             Err(e) => log!("[hotplug] get_status failed: {}", e),
+        }
+
+        // ── 存活对账（llhook）：用 GetLastInputInfo 这个"不经过本钩子"的独立见证，
+        // 判断"系统侧有输入、而本钩子长时间没有回调"。驱动后端返回 None，直接跳过。──
+        if let Some(l) = backend.liveness() {
+            if last_liveness_check.elapsed() >= std::time::Duration::from_secs(3) {
+                last_liveness_check = std::time::Instant::now();
+                match liveness_healthy {
+                    None => {
+                        liveness_healthy = Some(l.healthy);
+                        log!("llhook: liveness callbacks={} passthrough={} sys_idle={}ms since_last_cb={}ms -> {}",
+                             l.callbacks, l.passthrough, l.system_idle_ms, l.since_last_cb_ms,
+                             if l.healthy { "healthy" } else { "SUSPECT" });
+                    }
+                    Some(true) if !l.healthy => {
+                        let due = last_unhealthy_log
+                            .map_or(true, |t| t.elapsed() >= std::time::Duration::from_secs(30));
+                        if due {
+                            last_unhealthy_log = Some(std::time::Instant::now());
+                            log!("WARN llhook: 系统侧有输入但钩子已 {}ms 无回调 (callbacks={} passthrough={}) — 可能钩子被系统摘除，或前台是提权窗口（不提权运行时收不到，属预期）",
+                                 l.since_last_cb_ms, l.callbacks, l.passthrough);
+                        }
+                        liveness_healthy = Some(false);
+                    }
+                    Some(false) if l.healthy => {
+                        log!("llhook: hook callbacks resumed (callbacks={})", l.callbacks);
+                        liveness_healthy = Some(true);
+                    }
+                    _ => {}
+                }
+            }
         }
 
         // Process expired timers
@@ -740,7 +891,10 @@ fn main() {
         }
     }
 
-    let _ = backend.set_intercept(0, false); // v0.4: disable all on shutdown
+    // 驱动后端：退出前把所有设备置回透传。
+    // 免驱动后端：这是空操作 —— 它的闸门就是钩子本身，`HookInput::drop` 会
+    // 先撤吞键开关、再 UnhookWindowsHookEx，然后在途按键立即恢复原生。
+    let _ = backend.set_intercept(0, false);
 }
 
 /// Send Unicode text via Windows SendInput (shared by both backends).
