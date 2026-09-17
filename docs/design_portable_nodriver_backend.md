@@ -268,13 +268,18 @@ impl Backend {
 
 | 步骤 | 内容 |
 |---|---|
-| **Step 0** | `main.rs` 参数解析改全 argv 扫描（修 `--debug` 被静默丢掉的隐患）+ 日志改追加。**先做的理由**：修的是现存隐患，不依赖任何新功能，风险最低 |
-| Step 1 | `backend.rs` + `hook_input.rs`：钩子 + 消息泵 + 空白透传通路 + 1:1 投影，用最小映射（单键）跑通端到端 |
-| Step 2 | `sendinput_out.rs`（鼠标）+ 文本 / `{Select N}` 验证 |
-| Step 3 | 日志补齐（requested / fallback / 首次回调 / exit_reason） |
+| **Step 0** | `main.rs` 参数解析改全 argv 扫描（修 `--debug` 被静默丢掉的隐患）+ 日志改追加。**先做的理由**：修的是现存隐患，不依赖任何新功能，风险最低。✅ 已做，提交 `03d4e2a` |
+| Step 1 | `backend.rs`：`enum Backend` + 薄方法，**行为完全不变**（等价重构）。✅ 已做，提交 `b85762c` |
+| Step 2 | `hook_input.rs`（钩子 + 消息泵 + 有界通道 + 1:1 投影）+ `sendinput_out.rs`（鼠标）+ `Backend::LlHook` 变体 + `--backend=` 参数与引擎内回退。✅ 已做，提交 `78a5e39` |
+| Step 3 | 日志补齐（requested / fallback / **首次钩子回调** / exit_reason） |
 | Step 4 | 托盘传参 + GUI 开关 + 配置字段 |
-| Step 5 | 收尾解耦（`registry` / `app_sensor` / `emit` / `current_device`） |
+| Step 5 | 收尾解耦（`registry` / `app_sensor` / `emit` / `current_device`；并把四个事件结构体从 `filter_driver.rs` 搬进中性模块，使两个新模块不再与 `filter-driver` 同 cfg） |
 | Step 6 | 打包便携 ZIP（不含 `anykeyFilterDriver/` 与 `安装驱动.bat`）+ README 能力对照表 |
+| **人工验证** | 每个涉及输入的步骤之后都要做一次**实机**冒烟（敲键盘确认映射生效）—— 自动化测试覆盖不到钩子本身 |
+
+> **构建注意（本机环境，2026-09-17 实测）**：`cargo build` / `cargo test` 要把 target 移出工作区 ——
+> `CARGO_TARGET_DIR=C:/Users/proje/AppData/Local/Temp/<name> cargo test`。否则**在工作区内链接可执行文件会死锁**
+> （产物已写出、rustc 永不退出）。机制与诊断见 §10 的 Step 2 记录。
 
 ---
 
