@@ -344,6 +344,35 @@ impl Backend {
 
 **下一步**：Step 1 —— `backend.rs`（`enum Backend` + 8 个薄方法，driver 变体先只包住现状；**要求行为完全不变**）+ 参数加 `--backend=driver|llhook`。
 
+### Step 1 —— 引入 `Backend` 抽象（提交 `b85762c`，**等价重构**）
+
+**做了什么**
+
+- 新增 `anykey-engine/src/backend.rs`：`enum Backend { Driver(FilterDriver) }` + 8 个薄方法
+  （`name` / `poll_all` / `send_output` / `send_mouse_output` / `set_intercept` / `device_count` / `enum_devices` / `device_changed`），
+  **`match` 只出现在这一个文件里**。故意没有预留任何无人调用的方法。
+- `lib.rs`：按 `filter_driver` 同样的 `#[cfg(feature = "filter-driver")]` 声明 `pub mod backend`。
+- `main.rs`：构造期（`open` / `register_event` / 首次排空）仍用具体 `FilterDriver`，之后 `let backend = Backend::Driver(fd);`
+  并打一行 `Backend: driver`；此后约 15 处调用点全部改为 `backend.*`；`drain_emit_log_flt` 与 `rematch` 的签名
+  由 `&FilterDriver` 改为 `&Backend`；热插拔那种"读状态取一次性标志"的逻辑收进 `Backend::device_changed()`，
+  `ANYKEY_FLAG_DEVICE_CHANGED` 不再出现在 `main.rs`。
+- `registry.rs`：`scan_all` / `init` / `refresh` 改收 `&Backend`。
+
+**验证**
+
+- `cargo build` 通过（35.57s，**零警告**）；`cargo test` **110 项全绿**（16 组）。
+- 行尾自检：本次用 Python 整文件重写，特意核对了 CRLF 计数（全部为 0，纯 LF），`git diff --stat` 仅 +135/−35 ——
+  没有出现"整文件行尾变化淹没 diff"这种意外。
+
+**遇到的问题**
+
+- **管道不可靠**：`cargo test ... | python 解析` 拿到 0 行（本机 shell 包装脚本会干扰管道），已改为**落盘再解析**。
+- 解析 `test result:` 行时第一版用 `split()[-1]`，取到的是 `passed` 而不是数字 → 改用正则。教训：**统计脚本自己也要先验证一次**。
+
+**待补的验证（无法自动）**：驱动模式冒烟 —— 构建 release 后由托盘重载，确认日常使用一切照旧（本段是等价重构，风险低但应确认）。
+
+**下一步**：Step 2 —— `hook_input.rs`（钩子 + 专用线程消息泵 + 有界通道）与 `sendinput_out.rs`（SendInput 鼠标），并在 `backend.rs` 加 `LlHook` 变体。
+
 ## 附录 A：被否决的路线（一句话，防止重走）
 
 | 路线 | 否决原因 |
