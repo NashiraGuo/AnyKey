@@ -316,6 +316,7 @@ impl Backend {
 - 仓库状态：分支 `main`，HEAD `ef7f36c3`（与 `origin/main` 同步）；工作区无修改，仅 3 个未跟踪项（本设计文档、`tools/`、`build/release.zip`）。
 - 动手前快照：`backups/20260917_portable_backend/`（649.4 KB，含 `MANIFEST.txt` 记录 HEAD）—— 覆盖 git 管不到的部分。
 - 工作流：**文档留 `main`（本文件是活日志，不随代码回退）**；代码在 `feat/portable-backend` 分支上按"可编译 + 可独立解释"的边界分段提交；每段结束必须编译 + 跑测试。
+  - ⚠️ **已变更**：当天晚些时候因 `git switch` 事故（见下方事故条目）改为**不切分支**的提交方式 —— 文档用 `AnyKey/tools/doc_to_main.py` 直接提交到 `main`。
 
 **遇到的问题 / 决策**：
 
@@ -372,6 +373,52 @@ impl Backend {
 **待补的验证（无法自动）**：驱动模式冒烟 —— 构建 release 后由托盘重载，确认日常使用一切照旧（本段是等价重构，风险低但应确认）。
 
 **下一步**：Step 2 —— `hook_input.rs`（钩子 + 专用线程消息泵 + 有界通道）与 `sendinput_out.rs`（SendInput 鼠标），并在 `backend.rs` 加 `LlHook` 变体。
+
+### 2026-09-17 事故：`git switch` 让整个 `anykey-engine/src/` 从磁盘消失（两次）
+
+**现象**
+
+- 第一次：一条链式命令（`git switch -q main` + 文档补丁 + `git commit` + `git switch` 切回）执行中被 SIGTERM 打断；
+  `anykey-engine/src/` **整棵目录从磁盘消失**，HEAD 仍停在原分支，并留下 **0 字节的 `.git/index.lock`**。
+- 第二次：在**工作区干净、无锁、内容已验证一致**的情况下，单独一条 `git switch -q main` 同样被 SIGTERM，`src/` 再次整棵消失。
+
+**根因（实测归纳）**
+
+本环境中 **git 驱动的文件删除**会触发进程被杀。两次失败都发生在 `git switch` 需要**删除**分支独有文件（`backend.rs`，main 上没有）的那一刻；
+而纯创建/覆盖写从未失败过（`git restore --source=HEAD --worktree -- <path>`、`git add`、`git commit`、`git read-tree`、`git update-index` 全部正常）。
+这与本项目历史上 **`git rm` 导致整个目录树消失**是同一类问题。
+
+**恢复配方（第二次已验证）**
+
+1. 确认没有 git 进程 → 删除陈旧 `.git/index.lock`（本次为 0 字节，确认无进程后可安全删）；
+2. `git read-tree HEAD` —— 只重置**索引**（清掉被中断操作留下的暂存删除），不动工作区；
+3. `git restore --source=HEAD --worktree -- anykey-engine/src` —— **只创建**，不删除；
+4. **行尾归一化**：把工作区文件写成与库内 blob **逐字节一致**。因为 `core.autocrlf=true` 会让 `git restore` 写出 CRLF，
+   而 `git switch` 的安全检查**不认 CRLF 为"未修改"**（`git diff` 却会归一化后认为无差异）—— 两者判定不一致会产生
+   "幽灵修改"，既阻止切换也让人误以为有改动；
+5. `git update-index --refresh`，然后 `git status` 应只剩有意未跟踪的 `tools/`。
+
+**流程变更：不再使用 `git switch`**
+
+文档改由 `AnyKey/tools/doc_to_main.py` 提交到 `main`，原理是 git 底层命令：
+
+```
+hash-object -w                      # 工作区文档 → blob
+read-tree main                      # 用**临时索引**(GIT_INDEX_FILE 隔离)取出 main 的树
+update-index --cacheinfo 100644,<blob>,<path>
+write-tree                          # 新树
+commit-tree <tree> -p main -m "…"   # 以 main 为父
+update-ref refs/heads/main <commit> # 移动 main 指针
+```
+
+全程只有"写对象 / 改索引 / 移指针"，**不碰工作区、不删除任何文件**。文档在 `main` 与分支上内容保持一致
+（两边 blob 相同，故日后合并该文件不冲突）；代码仍只在分支上提交。
+
+**教训**
+
+1. **一次只跑一条 git 命令，不链式**（链式一旦中断，症状是"目录消失 + 陈旧锁"，排查成本高）。
+2. **任何"会删除工作区文件"的 git 操作在这台机器上都按危险操作对待** —— `git switch` 也要算进去，不只是 `git rm`。
+3. 用脚本改写文件时**保留或归一化行尾**；`git diff` 与 `git status/switch` 对 CRLF 的判定不一致，不能只看其中一个。
 
 ## 附录 A：被否决的路线（一句话，防止重走）
 
