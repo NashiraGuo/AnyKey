@@ -100,7 +100,8 @@ struct Shared {
     swallow: AtomicBool,
     /// 键盘回调次数（成功入队才算）。main loop 靠它判断"装上≠收得到"。
     callbacks: AtomicU64,
-    /// 最后一次成功入队的系统 tick（`GetTickCount` 基准）。
+    /// 最后一次**任意**钩子回调（键盘或鼠标，含纯移动与放行的注入事件）的系统 tick。
+    /// ⚠️ 必须是"被调用的时刻"，不是"入队成功的时刻"——否则只动鼠标不打字时会误报失活。
     last_cb_tick: AtomicU32,
     /// 安装时刻的系统 tick —— 还没收到任何回调时用它作对账基准。
     install_tick: AtomicU32,
@@ -197,6 +198,11 @@ unsafe extern "system" fn kb_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM
         let Some(sh) = SHARED.get() else {
             return next(code, wparam, lparam);
         };
+        // 存活对账的基准必须是"**我们被调用的时刻**"，而不是"我们成功入队的时刻"。
+        // 实测踩过：用户只动鼠标、不打字时，键盘钩子不更新这个值，而 GetLastInputInfo 会因
+        // 鼠标活动推进 → 误报"钩子失活"（smoke 测试里 mouse_moves=722 却打出 WARN）。
+        // GetTickCount 读的是 KUSER_SHARED_DATA，无系统调用，每帧刷新开销可忽略。
+        sh.last_cb_tick.store(GetTickCount(), Ordering::Relaxed);
         let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
         let flags = kb.flags;
 
@@ -221,7 +227,6 @@ unsafe extern "system" fn kb_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM
         match sh.tx.try_send(HookEvent::Key(ev)) {
             Ok(()) => {
                 sh.callbacks.fetch_add(1, Ordering::Relaxed);
-                sh.last_cb_tick.store(GetTickCount(), Ordering::Relaxed);
                 1 // 吞掉：交给管道决定输出什么（A2 决策）
             }
             Err(_) => {
@@ -245,6 +250,8 @@ unsafe extern "system" fn ms_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM
         let Some(sh) = SHARED.get() else {
             return next(code, wparam, lparam);
         };
+        // 同键盘钩子：任意一次回调都刷新"最后一次回调时刻"（含纯移动与放行的注入事件）。
+        sh.last_cb_tick.store(GetTickCount(), Ordering::Relaxed);
         let ms = &*(lparam as *const MSLLHOOKSTRUCT);
         let msg = wparam as u32;
 
@@ -469,6 +476,9 @@ impl HookInput {
 
     /// 钩子存活对账。判定式：**系统侧最近一次输入发生在"本钩子最后一次回调"之后，
     /// 且已持续超过 `HOOK_SILENT_LIMIT_MS`** → 有输入没经过我们。
+    ///
+    /// "最后一次回调"含**鼠标钩子**的回调 —— 这一点是实测修正过的：只动鼠标不打字时，
+    /// 若基准只看键盘入队，就会被误判成钩子失活（smoke 测试里 mouse_moves=722 打出 WARN）。
     ///
     /// 用 `GetLastInputInfo()` 而不是自己的计数器，是因为它是系统级、**不经过本钩子**
     /// 的独立见证（实测验证过，见 tools/probe_elev_hook2.py）。

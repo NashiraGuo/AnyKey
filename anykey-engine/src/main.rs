@@ -758,7 +758,7 @@ fn main() {
                             .map_or(true, |t| t.elapsed() >= std::time::Duration::from_secs(30));
                         if due {
                             last_unhealthy_log = Some(std::time::Instant::now());
-                            log!("WARN llhook: 系统侧有输入但键盘钩子已 {}ms 无回调 (kb_callbacks={} mouse_edges={} mouse_moves={} passthrough={}) — 可能钩子被系统摘除，或前台是提权窗口（不提权运行时收不到，属预期）；若 mouse_edges 在增长则说明钩子机制本身存活",
+                            log!("WARN llhook: 系统侧有输入但钩子已 {}ms 无回调 (kb_callbacks={} mouse_edges={} mouse_moves={} passthrough={}) — 可能钩子被系统摘除，或前台是提权窗口（不提权运行时键盘路径收不到，属预期）",
                                  l.since_last_cb_ms, l.callbacks, l.mouse_edges,
                                  l.mouse_moves, l.passthrough);
                         }
