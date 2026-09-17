@@ -341,7 +341,7 @@ fn main() {
             }
             match HookInput::install() {
                 Ok(h) => {
-                    log!("llhook: SetWindowsHookExW(WH_KEYBOARD_LL) -> OK");
+                    log!("llhook: SetWindowsHookExW(WH_KEYBOARD_LL + WH_MOUSE_LL) -> OK");
                     log!("llhook: message pump thread started (heartbeat/watchdog n/a; \
                           main loop 用钩子存活对账替代)");
                     Backend::LlHook(h)
@@ -748,8 +748,9 @@ fn main() {
                 match liveness_healthy {
                     None => {
                         liveness_healthy = Some(l.healthy);
-                        log!("llhook: liveness callbacks={} passthrough={} sys_idle={}ms since_last_cb={}ms -> {}",
-                             l.callbacks, l.passthrough, l.system_idle_ms, l.since_last_cb_ms,
+                        log!("llhook: liveness kb_callbacks={} mouse_edges={} mouse_moves={} passthrough={} sys_idle={}ms since_last_kb_cb={}ms -> {}",
+                             l.callbacks, l.mouse_edges, l.mouse_moves, l.passthrough,
+                             l.system_idle_ms, l.since_last_cb_ms,
                              if l.healthy { "healthy" } else { "SUSPECT" });
                     }
                     Some(true) if !l.healthy => {
@@ -757,13 +758,15 @@ fn main() {
                             .map_or(true, |t| t.elapsed() >= std::time::Duration::from_secs(30));
                         if due {
                             last_unhealthy_log = Some(std::time::Instant::now());
-                            log!("WARN llhook: 系统侧有输入但钩子已 {}ms 无回调 (callbacks={} passthrough={}) — 可能钩子被系统摘除，或前台是提权窗口（不提权运行时收不到，属预期）",
-                                 l.since_last_cb_ms, l.callbacks, l.passthrough);
+                            log!("WARN llhook: 系统侧有输入但键盘钩子已 {}ms 无回调 (kb_callbacks={} mouse_edges={} mouse_moves={} passthrough={}) — 可能钩子被系统摘除，或前台是提权窗口（不提权运行时收不到，属预期）；若 mouse_edges 在增长则说明钩子机制本身存活",
+                                 l.since_last_cb_ms, l.callbacks, l.mouse_edges,
+                                 l.mouse_moves, l.passthrough);
                         }
                         liveness_healthy = Some(false);
                     }
                     Some(false) if l.healthy => {
-                        log!("llhook: hook callbacks resumed (callbacks={})", l.callbacks);
+                        log!("llhook: hook callbacks resumed (kb={} mouse_edges={})",
+                             l.callbacks, l.mouse_edges);
                         liveness_healthy = Some(true);
                     }
                     _ => {}

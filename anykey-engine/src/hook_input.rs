@@ -1,32 +1,57 @@
-//! hook_input.rs — 免驱动输入后端：`WH_KEYBOARD_LL` + 专用线程消息泵。
+//! hook_input.rs — 免驱动输入后端：`WH_KEYBOARD_LL` + `WH_MOUSE_LL` + 专用线程消息泵。
 //!
-//! 这个模块是"便携模式"的输入侧。它产出的 `AnyKeyInputEvent` 与驱动后端逐字段同构
-//! （`make_code` = 裸扫描码、`flags` = BREAK/E0/E1），所以整条 pipeline 不需要任何改动。
+//! 这个模块是"便携模式"的输入侧。它产出的事件与驱动后端**逐字段同构**
+//! （键盘 `make_code` = 裸扫描码、`flags` = BREAK/E0/E1；鼠标 `button_flags` = ntddmou 位，
+//! `button_data` = 滚轮增量），所以整条 pipeline 不需要任何改动。
 //!
-//! # 三条硬约束（都来自实测，见 docs/design_portable_nodriver_backend.md 与 tools/probe_*）
+//! # 四条硬约束（都来自实测，见 docs/design_portable_nodriver_backend.md 与 tools/probe_*）
 //!
 //! 1. **回调在安装钩子的那条线程上下发，那条线程必须有消息循环。**
-//!    所以钩子装在专用线程上，跑 `MsgWaitForMultipleObjectsEx` 泵（与 `app_sensor.rs` 同一模式）。
-//!    线程退出 = 钩子失效，因此泵循环只在收到 WM_QUIT 时返回。
+//!    所以两个钩子都装在同一条专用线程上，跑 `MsgWaitForMultipleObjectsEx` 泵
+//!    （与 `app_sensor.rs` 同一模式）。线程退出 = 钩子失效，因此泵循环只在 WM_QUIT 时返回。
 //!
 //! 2. **回调绝不阻塞。** 判定 → `try_send` 进有界通道 → 立即返回。
-//!    通道满（管道失速）时**放行**该键（直通降级）：宁可这一次不映射，也绝不丢键。
-//!    ⚠️ 不要学 Kanata 的 `try_send_panic`（回调里 panic = 键盘卡死）。
+//!    通道满（管道失速）时**放行**该事件（直通降级）：宁可这一次不映射，也绝不丢键。
+//!    ⚠️ 不要学 Kanata 的 `try_send_panic`（回调里 panic = 键盘/鼠标卡死）。
 //!
 //! 3. **本进程绝不注册键盘 Raw Input。** 实测：同进程一旦 `RegisterRawInputDevices`
-//!    注册键盘 TLC，LL hook 立即停止被调用（反注册后恢复）。这也是便携模式暂不接管
-//!    鼠标的原因之一（要接管鼠标得单独起进程或改用别的手段，见设计文档）。
+//!    注册键盘 TLC，LL hook 立即停止被调用（反注册后恢复）。
+//!    便携模式**也不需要** Raw Input —— 它没有设备维度，设备身份没有用处。
+//!
+//! 4. **鼠标钩子与键盘钩子同线程共存已实测**（`tools/probe_llmouse.py`）：
+//!    装上鼠标钩子后键盘钩子仍正常回调，放行的移动与点击都正常到达目标。
+//!
+//! # 鼠标事件模型（与驱动严格对齐）
+//!
+//! 驱动侧的规则是：**纯移动（`ButtonFlags == 0`）直接转发给系统、不入队**；
+//! 只有**按键 / 滚轮**才进管道（`anykey_flt.c` 注释原文 "Pure movement …
+//! forward to system immediately, no queue"）。本模块照此实现：
+//!
+//! | 钩子消息 | 处理 |
+//! |---|---|
+//! | `WM_MOUSEMOVE` | **放行**（只计数，不产生事件）—— 高频事件走"吞+重放"是性能灾难 |
+//! | 按键 / 滚轮 | 造 `AnyKeyMouseEvent` 入队并**吞掉**，由管道决定输出什么 |
+//!
+//! `flags` 恒为 `MOUSE_MOVE_RELATIVE`、`last_x/last_y` 恒为 0：这两个字段描述的是
+//! **同一数据包里的位移**，而按键/滚轮包里没有位移语义；驱动那边它们也只是随包携带、
+//! 引擎侧仅用于日志，不参与任何判定。
 //!
 //! # 自注入识别
 //!
-//! 只用 `LLKHF_INJECTED` 这一位，且**必须放行**：本后端的输出走 `SendInput`，那会再次
-//! 经过本钩子；若把它也吞掉，就会出现"自己的输出被自己吞掉 → 应用永远收不到键"的死锁。
-//! 不用 `dwExtraInfo` 打标记（Kanata 也不打），少一层约定。
+//! 只用 `LLKHF_INJECTED` / `LLMHF_INJECTED` 这一位，且**必须放行**：本后端的输出走
+//! `SendInput`，那会再次经过本钩子；若把它也吞掉，就会出现"自己的输出被自己吞掉 →
+//! 应用永远收不到"的死锁。不用 `dwExtraInfo` 打标记（Kanata 也不打），少一层约定。
 
 use crate::filter_driver::{
     AnyKeyInputEvent, AnyKeyMouseEvent, AnyKeyOutputEvent, ANYKEY_KEY_BREAK, ANYKEY_KEY_E0,
-    ANYKEY_KEY_E1,
+    ANYKEY_KEY_E1, MOUSE_BUTTON_4_DOWN, MOUSE_BUTTON_4_UP, MOUSE_BUTTON_5_DOWN,
+    MOUSE_BUTTON_5_UP, MOUSE_HWHEEL, MOUSE_LEFT_BUTTON_DOWN, MOUSE_LEFT_BUTTON_UP,
+    MOUSE_MIDDLE_BUTTON_DOWN, MOUSE_MIDDLE_BUTTON_UP, MOUSE_MOVE_RELATIVE, MOUSE_RIGHT_BUTTON_DOWN,
+    MOUSE_RIGHT_BUTTON_UP, MOUSE_WHEEL,
 };
+// XBUTTON1/2 的系统定义只在 ntddmou / winuser 头里，windows-sys 未导出；
+// 单一来源放在 sendinput_out.rs（输出侧也要用），这里引用同一份。
+use crate::sendinput_out::{XBUTTON1, XBUTTON2};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::OnceLock;
@@ -37,14 +62,17 @@ use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP,
-    MsgWaitForMultipleObjectsEx, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
-    TranslateMessage, UnhookWindowsHookEx, MSG, PM_REMOVE, QS_ALLINPUT, WH_KEYBOARD_LL, WM_QUIT,
+    LLMHF_INJECTED, MSLLHOOKSTRUCT, MsgWaitForMultipleObjectsEx, PeekMessageW, PostThreadMessageW,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, MSG, PM_REMOVE, QS_ALLINPUT,
+    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 /// 有界通道容量。管道正常时空闲；只有在管道失速（例如某个 Run: 卡住）时才会满，
-/// 满了就直通降级，不丢键。
+/// 满了就直通降级，不丢事件。
 const CHANNEL_CAP: usize = 512;
-/// 单次 `poll_all` 最多带走的条数（防止一次处理过多导致下一轮定时器饥饿）。
+/// 单次 `poll_all` 最多带走的条数（键盘 + 鼠标合计），防止一次处理过多导致下一轮定时器饥饿。
 const BATCH_MAX: usize = 256;
 /// 泵线程的唤醒间隔（毫秒）。只用于让线程可被 WM_QUIT 唤醒，不承载逻辑。
 const PUMP_TICK_MS: u32 = 1000;
@@ -53,22 +81,35 @@ const INSTALL_TIMEOUT_MS: u64 = 5000;
 /// 判定"钩子疑似失活"的门槛：系统侧有输入、而本钩子连续这么久没有回调。
 const HOOK_SILENT_LIMIT_MS: u32 = 5000;
 
+// ── 通道载荷 ──
+//
+// 键盘与鼠标走**同一条通道**：主循环是单线程顺序消费，两条通道会让"等键盘"与"等鼠标"
+// 互相阻塞（`recv_timeout` 只能等一条）。这与驱动后端"两个队列、同一次 poll 取走"的语义一致。
+enum HookEvent {
+    Key(AnyKeyInputEvent),
+    Mouse(AnyKeyMouseEvent),
+}
+
 // ── 全模块共享状态 ──
 //
 // 钩子回调是 `extern "system" fn`，没有 user data 参数，只能经静态取得上下文。
 // `Shared` 里全是原子量：回调路径上不做任何加锁（`SyncSender::try_send` 自身即可重入安全）。
 struct Shared {
-    tx: SyncSender<AnyKeyInputEvent>,
-    /// 是否吞键。A2 决策 = 装上即吞所有物理键；置 false 时为纯透传（撤下闸门）。
+    tx: SyncSender<HookEvent>,
+    /// 是否吞键/吞鼠标按键。A2 决策 = 装上即吞所有物理键；置 false 时为纯透传（撤下闸门）。
     swallow: AtomicBool,
-    /// 钩子回调次数（成功入队才算）。main loop 靠它判断"装上≠收得到"。
+    /// 键盘回调次数（成功入队才算）。main loop 靠它判断"装上≠收得到"。
     callbacks: AtomicU64,
     /// 最后一次成功入队的系统 tick（`GetTickCount` 基准）。
     last_cb_tick: AtomicU32,
     /// 安装时刻的系统 tick —— 还没收到任何回调时用它作对账基准。
     install_tick: AtomicU32,
-    /// 因通道满/断连而放行（直通降级）的按键数。
+    /// 因通道满/断连而放行（直通降级）的事件数。
     passthrough: AtomicU64,
+    /// 鼠标按键/滚轮回调数（含被放行的注入事件）。
+    mouse_edges: AtomicU64,
+    /// 鼠标移动回调数（全部放行，只作诊断）。
+    mouse_moves: AtomicU64,
     /// 泵线程 id（Drop 时 PostThreadMessageW(WM_QUIT) 用）。
     pump_tid: AtomicU32,
 }
@@ -104,9 +145,44 @@ pub fn project(vk_code: u32, scan_code: u32, hook_flags: u32) -> (u16, u16) {
     (scan_code as u16, flags)
 }
 
+/// 把鼠标钩子消息投影成驱动的 `MOUSEEVENT` 约定：`(button_flags, button_data)`。
+///
+/// - 按键 → ntddmou 的 `MOUSE_*_BUTTON_DOWN/UP` 单一位，`button_data = 0`
+/// - 滚轮 → `MOUSE_WHEEL` / `MOUSE_HWHEEL`，`button_data` = `mouseData` 高 16 位（**有符号**）
+/// - 纯移动与其他消息 → `None`（调用方放行；与驱动"纯移动不入队"一致）
+///
+/// XBUTTON 的编号藏在 `mouseData` 的高 16 位（`XBUTTON1` / `XBUTTON2`），而驱动侧只用
+/// `ButtonFlags` 表达，所以这里必须做一次查表。
+pub fn project_mouse(msg: u32, mouse_data: u32) -> Option<(u16, i16)> {
+    let hi = (mouse_data >> 16) as u16;
+    let signed = hi as i16;
+    let bf = match msg {
+        WM_LBUTTONDOWN => MOUSE_LEFT_BUTTON_DOWN,
+        WM_LBUTTONUP => MOUSE_LEFT_BUTTON_UP,
+        WM_RBUTTONDOWN => MOUSE_RIGHT_BUTTON_DOWN,
+        WM_RBUTTONUP => MOUSE_RIGHT_BUTTON_UP,
+        WM_MBUTTONDOWN => MOUSE_MIDDLE_BUTTON_DOWN,
+        WM_MBUTTONUP => MOUSE_MIDDLE_BUTTON_UP,
+        WM_XBUTTONDOWN | WM_XBUTTONUP => {
+            let down = msg == WM_XBUTTONDOWN;
+            match (hi as u32, down) {
+                (h, true) if h == XBUTTON1 => MOUSE_BUTTON_4_DOWN,
+                (h, true) if h == XBUTTON2 => MOUSE_BUTTON_5_DOWN,
+                (h, false) if h == XBUTTON1 => MOUSE_BUTTON_4_UP,
+                (h, false) if h == XBUTTON2 => MOUSE_BUTTON_5_UP,
+                _ => return None,
+            }
+        }
+        WM_MOUSEWHEEL => return Some((MOUSE_WHEEL, signed)),
+        WM_MOUSEHWHEEL => return Some((MOUSE_HWHEEL, signed)),
+        _ => return None,
+    };
+    Some((bf, 0))
+}
+
 // ── 钩子回调 ──
 
-unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn kb_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // 整个函数体放在显式 unsafe 块里：内部全是裸指针操作（解引用 lParam、调用 Win32），
     // 而且闭包不继承 `unsafe fn` 的 unsafe 上下文，显式写出更不容易出错。
     unsafe {
@@ -142,7 +218,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
             extra_info: kb.dwExtraInfo as u32,
         };
 
-        match sh.tx.try_send(ev) {
+        match sh.tx.try_send(HookEvent::Key(ev)) {
             Ok(()) => {
                 sh.callbacks.fetch_add(1, Ordering::Relaxed);
                 sh.last_cb_tick.store(GetTickCount(), Ordering::Relaxed);
@@ -150,6 +226,61 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
             }
             Err(_) => {
                 // 通道满或泵已死 —— 直通降级。绝不在这里等待、绝不 panic。
+                sh.passthrough.fetch_add(1, Ordering::Relaxed);
+                next(code, wparam, lparam)
+            }
+        }
+    }
+}
+
+unsafe extern "system" fn ms_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe {
+        let next = |code: i32, wparam: WPARAM, lparam: LPARAM| -> LRESULT {
+            CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+        };
+
+        if code < 0 {
+            return next(code, wparam, lparam);
+        }
+        let Some(sh) = SHARED.get() else {
+            return next(code, wparam, lparam);
+        };
+        let ms = &*(lparam as *const MSLLHOOKSTRUCT);
+        let msg = wparam as u32;
+
+        // 纯移动一律放行（与驱动一致：光标必须能动；高频事件"吞+重放"是性能灾难）。
+        if msg == WM_MOUSEMOVE {
+            sh.mouse_moves.fetch_add(1, Ordering::Relaxed);
+            return next(code, wparam, lparam);
+        }
+        let Some((button_flags, button_data)) = project_mouse(msg, ms.mouseData) else {
+            // 不认识的鼠标消息 —— 放行。
+            return next(code, wparam, lparam);
+        };
+        sh.mouse_edges.fetch_add(1, Ordering::Relaxed);
+
+        // 自注入放行（同键盘）。
+        if ms.flags & LLMHF_INJECTED != 0 {
+            return next(code, wparam, lparam);
+        }
+        if !sh.swallow.load(Ordering::Relaxed) {
+            return next(code, wparam, lparam);
+        }
+
+        let ev = AnyKeyMouseEvent {
+            device_id: 0,
+            // 按键/滚轮包没有位移语义：与驱动保持同一取值（驱动的那两个字段也不参与判定）。
+            flags: MOUSE_MOVE_RELATIVE,
+            button_flags,
+            button_data,
+            last_x: 0,
+            last_y: 0,
+            extra_info: ms.dwExtraInfo as u32,
+        };
+
+        match sh.tx.try_send(HookEvent::Mouse(ev)) {
+            Ok(()) => 1, // 吞掉
+            Err(_) => {
                 sh.passthrough.fetch_add(1, Ordering::Relaxed);
                 next(code, wparam, lparam)
             }
@@ -168,9 +299,9 @@ fn pump_thread(install_tx: Sender<Result<(), String>>) {
             sh.pump_tid.store(GetCurrentThreadId(), Ordering::SeqCst);
             sh.install_tick.store(GetTickCount(), Ordering::SeqCst);
         }
-        // hMod = NULL 对 WH_KEYBOARD_LL 是合法的（回调在当前进程内）。
-        let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), std::ptr::null_mut(), 0);
-        if hook.is_null() {
+        // hMod = NULL 对 WH_KEYBOARD_LL / WH_MOUSE_LL 是合法的（回调在当前进程内）。
+        let kb = SetWindowsHookExW(WH_KEYBOARD_LL, Some(kb_hook_proc), std::ptr::null_mut(), 0);
+        if kb.is_null() {
             let err = GetLastError();
             let _ = install_tx.send(Err(format!(
                 "SetWindowsHookExW(WH_KEYBOARD_LL) failed, GetLastError={}",
@@ -178,7 +309,21 @@ fn pump_thread(install_tx: Sender<Result<(), String>>) {
             )));
             return;
         }
-        HOOK_HANDLE.store(hook, Ordering::SeqCst);
+        KB_HOOK.store(kb, Ordering::SeqCst);
+
+        let ms = SetWindowsHookExW(WH_MOUSE_LL, Some(ms_hook_proc), std::ptr::null_mut(), 0);
+        if ms.is_null() {
+            // 鼠标钩子装不上就整体失败：用户明确要鼠标拦截，静默降级会变成"以为能用"。
+            let err = GetLastError();
+            UnhookWindowsHookEx(kb);
+            KB_HOOK.store(std::ptr::null_mut(), Ordering::SeqCst);
+            let _ = install_tx.send(Err(format!(
+                "SetWindowsHookExW(WH_MOUSE_LL) failed, GetLastError={}",
+                err
+            )));
+            return;
+        }
+        MS_HOOK.store(ms, Ordering::SeqCst);
         let _ = install_tx.send(Ok(()));
     }
 
@@ -205,7 +350,9 @@ fn pump_thread(install_tx: Sender<Result<(), String>>) {
 
 // ── 句柄存放（`HHOOK = *mut c_void` 不是 Send，用 AtomicPtr 跨线程传） ──
 
-static HOOK_HANDLE: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
+static KB_HOOK: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static MS_HOOK: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
 // ── 对外类型 ──
@@ -213,6 +360,10 @@ static HOOK_HANDLE: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
 /// 钩子存活对账结果（供 main loop 打日志）。
 pub struct HookLiveness {
     pub callbacks: u64,
+    /// 鼠标按键/滚轮回调数（含被放行的注入事件）——
+    /// 用来区分"鼠标钩子没工作"和"键盘钩子没工作"。
+    pub mouse_edges: u64,
+    pub mouse_moves: u64,
     pub since_last_cb_ms: u32,
     pub system_idle_ms: u32,
     pub passthrough: u64,
@@ -222,17 +373,18 @@ pub struct HookLiveness {
 }
 
 pub struct HookInput {
-    rx: Receiver<AnyKeyInputEvent>,
-    hook: *mut std::ffi::c_void,
+    rx: Receiver<HookEvent>,
+    kb_hook: *mut std::ffi::c_void,
+    ms_hook: *mut std::ffi::c_void,
 }
 
 unsafe impl Send for HookInput {}
 
 impl HookInput {
-    /// 安装全局键盘低级钩子。成功后从那一刻起**所有物理键都会被吞掉**（A2 决策），
-    /// 由管道逐个重放。
+    /// 安装全局键盘 + 鼠标低级钩子。成功后从那一刻起**所有物理按键（含鼠标按键/滚轮）
+    /// 都会被吞掉**（A2 决策），由管道逐个重放；鼠标**移动**始终放行。
     pub fn install() -> Result<Self, String> {
-        let (tx, rx) = sync_channel::<AnyKeyInputEvent>(CHANNEL_CAP);
+        let (tx, rx) = sync_channel::<HookEvent>(CHANNEL_CAP);
         let (install_tx, install_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
         SHARED
@@ -243,6 +395,8 @@ impl HookInput {
                 last_cb_tick: AtomicU32::new(0),
                 install_tick: AtomicU32::new(0),
                 passthrough: AtomicU64::new(0),
+                mouse_edges: AtomicU64::new(0),
+                mouse_moves: AtomicU64::new(0),
                 pump_tid: AtomicU32::new(0),
             })
             .map_err(|_| "llhook backend already installed in this process".to_string())?;
@@ -254,8 +408,9 @@ impl HookInput {
 
         match install_rx.recv_timeout(Duration::from_millis(INSTALL_TIMEOUT_MS)) {
             Ok(Ok(())) => {
-                let hook = HOOK_HANDLE.load(Ordering::SeqCst);
-                Ok(HookInput { rx, hook })
+                let kb = KB_HOOK.load(Ordering::SeqCst);
+                let ms = MS_HOOK.load(Ordering::SeqCst);
+                Ok(HookInput { rx, kb_hook: kb, ms_hook: ms })
             }
             Ok(Err(e)) => Err(e),
             Err(_) => Err(format!(
@@ -265,30 +420,32 @@ impl HookInput {
         }
     }
 
-    /// 等待输入。**超时返回空 Vec**（与驱动后端同语义）——主循环靠"返回空"这一刻推进
-    /// combo / tap-dance / defer 的定时器。
-    ///
-    /// 便携模式不接管鼠标：mouse 侧恒为空（见模块头注释 3）。
+    /// 等待输入（键盘 + 鼠标）。**超时返回空 Vec**（与驱动后端同语义）——
+    /// 主循环靠"返回空"这一刻推进 combo / tap-dance / defer 的定时器。
     pub fn poll_all(
         &self,
         timeout_ms: u32,
     ) -> Result<(Vec<AnyKeyInputEvent>, Vec<AnyKeyMouseEvent>), String> {
         let mut kb: Vec<AnyKeyInputEvent> = Vec::with_capacity(16);
+        let mut ms: Vec<AnyKeyMouseEvent> = Vec::with_capacity(4);
+
         match self.rx.recv_timeout(Duration::from_millis(timeout_ms as u64)) {
-            Ok(e) => kb.push(e),
-            Err(RecvTimeoutError::Timeout) => return Ok((kb, Vec::new())),
+            Ok(HookEvent::Key(k)) => kb.push(k),
+            Ok(HookEvent::Mouse(m)) => ms.push(m),
+            Err(RecvTimeoutError::Timeout) => return Ok((kb, ms)),
             Err(RecvTimeoutError::Disconnected) => {
-                // 泵线程死了 → 钩子也已失效（键会原样透传），引擎应退出而不是继续跑。
+                // 泵线程死了 → 钩子也已失效（事件会原样透传），引擎应退出而不是继续跑。
                 return Err("llhook pump thread exited (channel closed)".into());
             }
         }
-        while kb.len() < BATCH_MAX {
+        while kb.len() + ms.len() < BATCH_MAX {
             match self.rx.try_recv() {
-                Ok(e) => kb.push(e),
+                Ok(HookEvent::Key(k)) => kb.push(k),
+                Ok(HookEvent::Mouse(m)) => ms.push(m),
                 Err(_) => break,
             }
         }
-        Ok((kb, Vec::new()))
+        Ok((kb, ms))
     }
 
     /// 注入一个键盘输出事件（扫描码模式，复用 `emit.rs` 的 SendInput 实现）。
@@ -317,7 +474,7 @@ impl HookInput {
     /// 的独立见证（实测验证过，见 tools/probe_elev_hook2.py）。
     pub fn liveness(&self) -> HookLiveness {
         let now = unsafe { GetTickCount() };
-        let (callbacks, passthrough, baseline) = match SHARED.get() {
+        let (callbacks, mouse_edges, mouse_moves, passthrough, baseline) = match SHARED.get() {
             Some(sh) => {
                 let last = sh.last_cb_tick.load(Ordering::Relaxed);
                 let base = if last != 0 {
@@ -327,11 +484,13 @@ impl HookInput {
                 };
                 (
                     sh.callbacks.load(Ordering::Relaxed),
+                    sh.mouse_edges.load(Ordering::Relaxed),
+                    sh.mouse_moves.load(Ordering::Relaxed),
                     sh.passthrough.load(Ordering::Relaxed),
                     base,
                 )
             }
-            None => (0, 0, now),
+            None => (0, 0, 0, 0, now),
         };
         let since_last_cb_ms = now.wrapping_sub(baseline);
         let system_idle_ms = system_idle_ms(now);
@@ -339,6 +498,8 @@ impl HookInput {
         let missed = system_idle_ms < since_last_cb_ms;
         HookLiveness {
             callbacks,
+            mouse_edges,
+            mouse_moves,
             since_last_cb_ms,
             system_idle_ms,
             passthrough,
@@ -349,13 +510,17 @@ impl HookInput {
 
 impl Drop for HookInput {
     fn drop(&mut self) {
-        // 顺序：先撤闸门（停止吞键，在途回调立即变透传）→ 卸钩子 → 让泵线程退出。
+        // 顺序：先撤闸门（停止吞事件，在途回调立即变透传）→ 卸钩子 → 让泵线程退出。
         if let Some(sh) = SHARED.get() {
             sh.swallow.store(false, Ordering::SeqCst);
         }
-        if !self.hook.is_null() {
-            unsafe { UnhookWindowsHookEx(self.hook) };
-            HOOK_HANDLE.store(std::ptr::null_mut(), Ordering::SeqCst);
+        if !self.ms_hook.is_null() {
+            unsafe { UnhookWindowsHookEx(self.ms_hook) };
+            MS_HOOK.store(std::ptr::null_mut(), Ordering::SeqCst);
+        }
+        if !self.kb_hook.is_null() {
+            unsafe { UnhookWindowsHookEx(self.kb_hook) };
+            KB_HOOK.store(std::ptr::null_mut(), Ordering::SeqCst);
         }
         if let Some(sh) = SHARED.get() {
             let tid = sh.pump_tid.load(Ordering::SeqCst);
@@ -424,5 +589,45 @@ mod tests {
         for f in [0u32, LLKHF_EXTENDED, LLKHF_INJECTED] {
             assert_eq!(project(0x1E, 0x1E, f).1 & ANYKEY_KEY_BREAK, 0);
         }
+    }
+
+    #[test]
+    fn project_mouse_three_buttons() {
+        assert_eq!(project_mouse(WM_LBUTTONDOWN, 0), Some((MOUSE_LEFT_BUTTON_DOWN, 0)));
+        assert_eq!(project_mouse(WM_LBUTTONUP, 0), Some((MOUSE_LEFT_BUTTON_UP, 0)));
+        assert_eq!(project_mouse(WM_RBUTTONDOWN, 0), Some((MOUSE_RIGHT_BUTTON_DOWN, 0)));
+        assert_eq!(project_mouse(WM_RBUTTONUP, 0), Some((MOUSE_RIGHT_BUTTON_UP, 0)));
+        assert_eq!(project_mouse(WM_MBUTTONDOWN, 0), Some((MOUSE_MIDDLE_BUTTON_DOWN, 0)));
+        assert_eq!(project_mouse(WM_MBUTTONUP, 0), Some((MOUSE_MIDDLE_BUTTON_UP, 0)));
+    }
+
+    #[test]
+    fn project_mouse_xbuttons_carry_id_in_high_word() {
+        // XBUTTON 编号在 mouseData 的高 16 位：1 = XBUTTON1 → 驱动 4 号键，2 = XBUTTON2 → 5 号键
+        let x1 = (XBUTTON1 as u32) << 16;
+        let x2 = (XBUTTON2 as u32) << 16;
+        assert_eq!(project_mouse(WM_XBUTTONDOWN, x1), Some((MOUSE_BUTTON_4_DOWN, 0)));
+        assert_eq!(project_mouse(WM_XBUTTONUP, x1), Some((MOUSE_BUTTON_4_UP, 0)));
+        assert_eq!(project_mouse(WM_XBUTTONDOWN, x2), Some((MOUSE_BUTTON_5_DOWN, 0)));
+        assert_eq!(project_mouse(WM_XBUTTONUP, x2), Some((MOUSE_BUTTON_5_UP, 0)));
+        // 未知编号 → 不投影（放行）
+        assert_eq!(project_mouse(WM_XBUTTONDOWN, 7 << 16), None);
+    }
+
+    #[test]
+    fn project_mouse_wheel_keeps_signed_delta() {
+        // 上滚 120
+        assert_eq!(project_mouse(WM_MOUSEWHEEL, 120u32 << 16), Some((MOUSE_WHEEL, 120)));
+        // 下滚 -120（高 16 位按有符号解释）
+        assert_eq!(project_mouse(WM_MOUSEWHEEL, 0xFF88u32 << 16), Some((MOUSE_WHEEL, -120)));
+        assert_eq!(project_mouse(WM_MOUSEHWHEEL, 120u32 << 16), Some((MOUSE_HWHEEL, 120)));
+        assert_eq!(project_mouse(WM_MOUSEHWHEEL, 0xFF88u32 << 16), Some((MOUSE_HWHEEL, -120)));
+    }
+
+    #[test]
+    fn project_mouse_ignores_pure_move_and_unknown() {
+        // 纯移动不入管道 —— 与驱动 "Pure movement (ButtonFlags==0): forward to system" 一致
+        assert_eq!(project_mouse(WM_MOUSEMOVE, 0), None);
+        assert_eq!(project_mouse(0x0999, 0), None);
     }
 }

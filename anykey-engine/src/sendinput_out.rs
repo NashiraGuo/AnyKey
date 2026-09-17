@@ -34,9 +34,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 
-/// windows-sys 0.59 未导出这两个常量。
-const XBUTTON1: u32 = 0x0001;
-const XBUTTON2: u32 = 0x0002;
+/// `XBUTTON1` / `XBUTTON2`：windows-sys 0.59 未导出这两个常量。
+///
+/// 它们是**鼠标第 4/5 号键的编号**，两个方向都要用：
+/// 输出侧填进 `MOUSEINPUT.mouseData`，输入侧从 `MSLLHOOKSTRUCT.mouseData` 的高 16 位读出来
+/// （见 `hook_input.rs::project_mouse`）。所以定义在这里一处、两处共用。
+pub const XBUTTON1: u32 = 0x0001;
+pub const XBUTTON2: u32 = 0x0002;
 
 fn mouse_input(dx: i32, dy: i32, mouse_data: u32, flags: u32) -> INPUT {
     let mut input: INPUT = unsafe { std::mem::zeroed() };
