@@ -174,13 +174,11 @@ fn save_debug_flag(shared: &Arc<Shared>, enabled: bool) {
 }
 
 /// 读取配置中的 debug_enabled
+///
+/// 解析统一走 `crate::config`（同一份文件、同一套"缺省 + 归一化"规则），
+/// 不再在这里各写一遍 `serde_json` 取值 —— 那是第二处真相。
 pub fn load_debug_flag(base_dir: &PathBuf) -> bool {
-    let path = crate::paths::config_path(base_dir);
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| v.get("debug_enabled").and_then(|d| d.as_bool()))
-        .unwrap_or(false)
+    crate::config::load_bool(base_dir, "debug_enabled")
 }
 
 /// 切换开机自启

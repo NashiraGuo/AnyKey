@@ -10,6 +10,7 @@
 //!   - 启动线程：0.5s 后自动拉起引擎
 
 mod app;
+mod config;
 mod engine;
 mod icon;
 mod ipc;

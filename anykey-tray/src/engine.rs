@@ -1,6 +1,7 @@
 //! 引擎进程管理 —— 对应原 tray/main.py 的 _start_rust/_kill_engine/_is_engine_running
 //! 与监控线程。启动方式与 Python 版一致：
-//!   taskkill 残留 → 启动 [engine_exe, config.json, (--debug)] DETACHED + NO_WINDOW
+//!   taskkill 残留 → 启动 [engine_exe, config.json, (--debug), --backend=<driver|llhook>]
+//!   DETACHED + NO_WINDOW
 //!   → 0.5s 后确认存活 → 记录 pid。
 
 use std::os::windows::process::CommandExt;
@@ -46,6 +47,13 @@ pub fn start(shared: &Arc<Shared>) -> bool {
     if *shared.debug.lock().unwrap() {
         cmd.arg("--debug");
     }
+    // 后端：**每次启动都重新读文件**（不缓存）——写者是 GUI（只写 config、等引擎重载），
+    // 若在托盘启动时缓存，就会出现"GUI 改了 → 托盘重载 → 还是旧值"。
+    // 显式传参（而不是让引擎自己读这个字段）的理由：① 命令行可见，事后能直接确认
+    // "请求的是哪个后端"（引擎的启动横幅会把完整 argv 写进日志）；② 将来若需要
+    // "存储值 ≠ 生效值"还有余地；③ 零协议、无握手中间态。
+    let backend = crate::config::load_backend(&shared.base_dir);
+    cmd.arg(format!("--backend={}", backend));
     cmd.current_dir(engine_exe.parent().unwrap_or(Path::new(".")))
         .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
         .stdout(std::process::Stdio::null())
