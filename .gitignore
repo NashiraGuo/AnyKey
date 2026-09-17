@@ -46,6 +46,7 @@ anykey-filter-driver/build.log
 # ── 发布产物 ──
 build/release/
 AnyKey_v*.zip
+build/*.zip
 
 # ── 用户配置（含个人键位映射，由 GUI 生成）──
 anykey_config*.json
