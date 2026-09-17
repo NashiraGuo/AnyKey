@@ -41,6 +41,23 @@
 //! 只用 `LLKHF_INJECTED` / `LLMHF_INJECTED` 这一位，且**必须放行**：本后端的输出走
 //! `SendInput`，那会再次经过本钩子；若把它也吞掉，就会出现"自己的输出被自己吞掉 →
 //! 应用永远收不到"的死锁。不用 `dwExtraInfo` 打标记（Kanata 也不打），少一层约定。
+//!
+//! # 三个开关：capture / swallow / accept_injected
+//!
+//! 驱动后端早就有「拦截态」与「透传捕获态」的二分（`InterceptEnabled` / `CaptureEnabled`），
+//! 本模块原来把"入队"和"吞键"焊成了一件事（A2：装上即吞所有物理键），于是**无法只观察不吞**。
+//! 现在拆成三个独立开关，并由纯函数 `decide()` 合成唯一判定：
+//!
+//! | 开关 | 生产 | 自动化测试 | 退役（Drop） |
+//! |---|---|---|---|
+//! | `capture`（镜像入队） | true | true | **false** |
+//! | `swallow`（吞掉原事件） | true | **false** | false |
+//! | `accept_injected`（收下注入事件） | **false** | true | false |
+//!
+//! 测试模式 `HookOptions::for_test()` 的意义：本机没有别的办法产生"不带注入标记的按键"
+//! （驱动注入需要驱动 + 不处于拦截态），所以测试用 SendInput 注入、并把注入过滤关掉。
+//! `swallow=false` 是关键的安全属性 —— 测试期间钩子**只观察、不放行任何东西**，
+//! 因此跑 `cargo test` 不会影响本机键盘。
 
 use crate::events::{
     AnyKeyInputEvent, AnyKeyMouseEvent, AnyKeyOutputEvent, ANYKEY_KEY_BREAK, ANYKEY_KEY_E0,
@@ -96,8 +113,12 @@ enum HookEvent {
 // `Shared` 里全是原子量：回调路径上不做任何加锁（`SyncSender::try_send` 自身即可重入安全）。
 struct Shared {
     tx: SyncSender<HookEvent>,
+    /// 是否把事件镜像进通道。生产恒 true；退役时置 false（既不入队也不吞）。
+    capture: AtomicBool,
     /// 是否吞键/吞鼠标按键。A2 决策 = 装上即吞所有物理键；置 false 时为纯透传（撤下闸门）。
     swallow: AtomicBool,
+    /// 是否收下带 INJECTED 标记的事件。生产恒 false（防自注入回流）；仅测试为 true。
+    accept_injected: AtomicBool,
     /// 键盘回调次数（成功入队才算）。main loop 靠它判断"装上≠收得到"。
     callbacks: AtomicU64,
     /// 最后一次**任意**钩子回调（键盘或鼠标，含纯移动与放行的注入事件）的系统 tick。
@@ -116,6 +137,64 @@ struct Shared {
 }
 
 static SHARED: OnceLock<Shared> = OnceLock::new();
+
+// ── 回调判定（纯函数，可单测） ──
+
+/// 对一次钩子回调的处理动作。三种，互斥。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HookAction {
+    /// 不理会：不入队、直接交给下一个钩子。
+    Pass,
+    /// **入队但放行**：事件镜像给管道，同时原样交给系统（观察/测试模式）。
+    Mirror,
+    /// **入队并吞掉**：由管道逐个重放（生产模式）。
+    Swallow,
+}
+
+/// 钩子回调的唯一判定。顺序即语义：
+/// ① 注入事件且不接收 → `Pass`（防"自己的输出回流成输入"）
+/// ② 未镜像 → `Pass`（退役中）
+/// ③ 吞键 → `Swallow`，否则 → `Mirror`
+///
+/// 之所以抽成纯函数：这条判定有三个输入维度、且"吞错"的后果是键盘失灵，
+/// 必须能被真值表单测覆盖，而不是埋在 `extern "system"` 回调里。
+pub fn decide(injected: bool, capture: bool, swallow: bool, accept_injected: bool) -> HookAction {
+    if injected && !accept_injected {
+        return HookAction::Pass;
+    }
+    if !capture {
+        return HookAction::Pass;
+    }
+    if swallow {
+        HookAction::Swallow
+    } else {
+        HookAction::Mirror
+    }
+}
+
+/// 安装选项。两个构造函数就是两个合法用法，**不要**在别处拼组合。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct HookOptions {
+    /// 是否把事件镜像进通道（`false` 只在退役路径出现）。
+    pub capture: bool,
+    /// 是否吞掉原事件。`false` = 只观察，对应驱动后端的透传捕获模式。
+    pub swallow: bool,
+    /// 是否收下带 `INJECTED` 标记的事件。生产**必须** false（见模块头）。
+    pub accept_injected: bool,
+}
+
+impl HookOptions {
+    /// 生产模式：入队 + 吞掉所有物理按键（A2 决策），过滤注入事件。
+    pub fn production() -> Self {
+        Self { capture: true, swallow: true, accept_injected: false }
+    }
+
+    /// 自动化测试模式：**只观察**（不吞任何键 → 不影响本机使用）+ 接受注入事件
+    /// （测试只能靠 SendInput 造输入）。
+    pub fn for_test() -> Self {
+        Self { capture: true, swallow: false, accept_injected: true }
+    }
+}
 
 // ── 事件投影（纯函数，可单测） ──
 
@@ -206,12 +285,14 @@ unsafe extern "system" fn kb_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM
         let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
         let flags = kb.flags;
 
-        // 自注入放行：本后端输出走 SendInput，会再次回到这里。吞掉它 = 自己的输出被自己吞掉。
-        if flags & LLKHF_INJECTED != 0 {
-            return next(code, wparam, lparam);
-        }
-        // 未开启吞键（尚未 armed / 已降级 / 正在退出）→ 纯透传。
-        if !sh.swallow.load(Ordering::Relaxed) {
+        // 唯一判定入口（纯函数，真值表见 decide()）：注入过滤 → 闸门 → 吞/放。
+        let action = decide(
+            flags & LLKHF_INJECTED != 0,
+            sh.capture.load(Ordering::Relaxed),
+            sh.swallow.load(Ordering::Relaxed),
+            sh.accept_injected.load(Ordering::Relaxed),
+        );
+        if action == HookAction::Pass {
             return next(code, wparam, lparam);
         }
 
@@ -227,7 +308,11 @@ unsafe extern "system" fn kb_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM
         match sh.tx.try_send(HookEvent::Key(ev)) {
             Ok(()) => {
                 sh.callbacks.fetch_add(1, Ordering::Relaxed);
-                1 // 吞掉：交给管道决定输出什么（A2 决策）
+                if action == HookAction::Swallow {
+                    1 // 吞掉：交给管道决定输出什么（A2 决策）
+                } else {
+                    next(code, wparam, lparam) // Mirror：已入队，但原样放行
+                }
             }
             Err(_) => {
                 // 通道满或泵已死 —— 直通降级。绝不在这里等待、绝不 panic。
@@ -266,11 +351,15 @@ unsafe extern "system" fn ms_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM
         };
         sh.mouse_edges.fetch_add(1, Ordering::Relaxed);
 
-        // 自注入放行（同键盘）。
-        if ms.flags & LLMHF_INJECTED != 0 {
-            return next(code, wparam, lparam);
-        }
-        if !sh.swallow.load(Ordering::Relaxed) {
+        // 唯一判定入口（同键盘）。注意 `mouse_edges` 的计数在**判定之前**已经自增 ——
+        // `tools/check_logging_step3.py` 靠这一点：注入一次滚轮就足以证明"钩子装上后确实收到回调"。
+        let action = decide(
+            ms.flags & LLMHF_INJECTED != 0,
+            sh.capture.load(Ordering::Relaxed),
+            sh.swallow.load(Ordering::Relaxed),
+            sh.accept_injected.load(Ordering::Relaxed),
+        );
+        if action == HookAction::Pass {
             return next(code, wparam, lparam);
         }
 
@@ -286,7 +375,8 @@ unsafe extern "system" fn ms_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM
         };
 
         match sh.tx.try_send(HookEvent::Mouse(ev)) {
-            Ok(()) => 1, // 吞掉
+            Ok(()) if action == HookAction::Swallow => 1, // 吞掉
+            Ok(()) => next(code, wparam, lparam),        // Mirror：已入队，放行
             Err(_) => {
                 sh.passthrough.fetch_add(1, Ordering::Relaxed);
                 next(code, wparam, lparam)
@@ -392,14 +482,26 @@ unsafe impl Send for HookInput {}
 impl HookInput {
     /// 安装全局键盘 + 鼠标低级钩子。成功后从那一刻起**所有物理按键（含鼠标按键/滚轮）
     /// 都会被吞掉**（A2 决策），由管道逐个重放；鼠标**移动**始终放行。
+    ///
+    /// 等同 `install_with(HookOptions::production())`。
     pub fn install() -> Result<Self, String> {
+        Self::install_with(HookOptions::production())
+    }
+
+    /// 按给定选项安装（用法见 `HookOptions`）。
+    ///
+    /// ⚠️ 本进程只能装一份：`SHARED` 是 `OnceLock`，第二次调用返回 Err。
+    /// 所以自动化测试必须集中在**一个** test fn 里（见 `tests/llhook_backend_test.rs`）。
+    pub fn install_with(opts: HookOptions) -> Result<Self, String> {
         let (tx, rx) = sync_channel::<HookEvent>(CHANNEL_CAP);
         let (install_tx, install_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
         SHARED
             .set(Shared {
                 tx,
-                swallow: AtomicBool::new(true),
+                capture: AtomicBool::new(opts.capture),
+                swallow: AtomicBool::new(opts.swallow),
+                accept_injected: AtomicBool::new(opts.accept_injected),
                 callbacks: AtomicU64::new(0),
                 last_cb_tick: AtomicU32::new(0),
                 install_tick: AtomicU32::new(0),
@@ -522,9 +624,12 @@ impl HookInput {
 
 impl Drop for HookInput {
     fn drop(&mut self) {
-        // 顺序：先撤闸门（停止吞事件，在途回调立即变透传）→ 卸钩子 → 让泵线程退出。
+        // 顺序：先撤闸门（停止吞事件与镜像，在途回调立即变纯透传）→ 卸钩子 → 让泵线程退出。
+        // capture 也要置 false：否则退役期间按键会继续灌进没人读的通道（灌满后每次都记
+        // passthrough，纯属噪声）。
         if let Some(sh) = SHARED.get() {
             sh.swallow.store(false, Ordering::SeqCst);
+            sh.capture.store(false, Ordering::SeqCst);
         }
         if !self.ms_hook.is_null() {
             unsafe { UnhookWindowsHookEx(self.ms_hook) };
@@ -641,5 +746,48 @@ mod tests {
         // 纯移动不入管道 —— 与驱动 "Pure movement (ButtonFlags==0): forward to system" 一致
         assert_eq!(project_mouse(WM_MOUSEMOVE, 0), None);
         assert_eq!(project_mouse(0x0999, 0), None);
+    }
+}
+#[cfg(test)]
+mod decide_tests {
+    use super::{decide, HookAction};
+
+    /// 生产三态：capture+swallow+不接受注入。
+    const PROD: (bool, bool, bool) = (true, true, false);
+    /// 测试三态：capture+不吞+接受注入。
+    const TEST: (bool, bool, bool) = (true, false, true);
+
+    #[test]
+    fn production_swallows_physical_and_passes_injected() {
+        let (c, sw, ai) = PROD;
+        assert_eq!(decide(false, c, sw, ai), HookAction::Swallow, "物理键必须被吞");
+        assert_eq!(decide(true, c, sw, ai), HookAction::Pass,
+                   "带 INJECTED 的必须是 Pass —— 那是我们自己的 SendInput 输出，吞了就打不出字");
+    }
+
+    #[test]
+    fn test_mode_mirrors_everything_and_never_swallows() {
+        let (c, sw, ai) = TEST;
+        // 这是"跑 cargo test 不影响本机键盘"的形式化保证。
+        assert_eq!(decide(false, c, sw, ai), HookAction::Mirror);
+        assert_eq!(decide(true, c, sw, ai), HookAction::Mirror);
+    }
+
+    #[test]
+    fn dropped_gate_passes_everything_without_mirroring() {
+        // capture=false（退役中）：无论注入与否、swallow 是啥，都必须是 Pass。
+        for injected in [false, true] {
+            for swallow in [false, true] {
+                assert_eq!(decide(injected, false, swallow, true), HookAction::Pass,
+                           "capture=false 时不该入队（injected={} swallow={})", injected, swallow);
+            }
+        }
+    }
+
+    #[test]
+    fn mirror_and_swallow_differ_only_in_the_return_value() {
+        // 两者都入队，只有返回值不同 —— 这正是"入队"与"吞键"解耦后的语义。
+        assert_eq!(decide(false, true, false, false), HookAction::Mirror);
+        assert_eq!(decide(false, true, true, false), HookAction::Swallow);
     }
 }
