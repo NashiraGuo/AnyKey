@@ -643,6 +643,20 @@ exit_reason 行     OK    exit_reason = config_read_failed
 ---
 
 
+### 2026-09-17 22:50　Step 4 动手前：GUI 源码完整快照（第二层保险）
+
+- 用户提出"改 GUI 之前也要做快照"——第一轮快照（`backups/20260917_portable_backend/`）只覆盖了
+  `gui/main.py`，`gui/` 其余 6 个文件与整个 `lib/` 都没覆盖，是真实缺口。
+- 新增 `backups/20260917_gui_before_portable_backend/`：**12 个文件 / 321.6 KB**
+  （`gui/` 7 个 + `lib/` 4 个 + `requirements.txt`）。`MANIFEST.txt` 记录 HEAD `f8240f43`、分支、
+  当时的 `git status`、以及**每个文件的 sha256**；拷贝后逐文件哈希比对，**12/12 通过**。
+- 事实核对（避免高估这层快照的用途）：`gui/` 与 `lib/` 那 11 个文件**全部已被 git 跟踪**，
+  且快照时工作区干净 —— 所以这一层防的是**工具层 / git 事故**（本机 `git switch` 曾两次让
+  `anykey-engine/src/` 整棵目录消失），而不是防手误。恢复优先级：
+  `git restore --source=<sha> --worktree -- <具体路径>`（**必须按路径，不要 `.`**）→ 快照原样拷回。
+- 顺带记一个仓库根的垃圾文件：`nul`（0 字节）。是 shell 把 `> nul` 当成重定向造出来的产物，
+  不在 git 里、也不影响构建；因为是 Windows 保留设备名，常规删除方式不一定管用 —— **别去动它**。
+
 ## 附录 A：被否决的路线（一句话，防止重走）
 
 | 路线 | 否决原因 |
