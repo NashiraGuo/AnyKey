@@ -19,6 +19,7 @@ AnyKey 增加第二个后端：**输入用用户态 `WH_KEYBOARD_LL` 低级键�
 | 项 | 决定 |
 |---|---|
 | 吞键范围 | **吞所有键**，管道语义不变（与现有驱动后端**行为等价**，见 §3.1） |
+| 鼠标范围 | **按键 / 滚轮拦截重放；移动一律放行**（与驱动一致：纯移动直接转发、不入管道）。不注册 Raw Input，也不做鼠标按设备识别 |
 | 输出模式 | **扫描码模式**（复用 `emit.rs` 现成函数） |
 | 提权 | 不强制要求；提权窗口内映射静默不生效，这是系统行为（§3.4） |
 | 驱动失败回退 | **引擎内部完成**（driver → llhook），托盘不参与 |
@@ -90,6 +91,30 @@ AnyKeyInputEvent {
 
 ---
 
+### 3.6 键盘钩子与鼠标钩子可以在同一进程/同一线程共存（实测）
+
+便携模式要在已有的键盘钩子基础上再加一个鼠标钩子，所以这条必须先钉死 —— 否则做出来会是
+"装了鼠标就不能用键盘"。
+
+`tools/probe_llmouse.py`（两个钩子装在同一线程、同一个消息泵）实测五项全过：
+
+| 判定 | 结果 |
+|---|---|
+| 装上鼠标钩子后，键盘钩子仍收到回调 | ✅ |
+| 鼠标钩子能看到按键事件（注入点击 → `ms_hook_edge_injected=2`） | ✅ |
+| 鼠标钩子能看到移动事件 | ✅ |
+| 放行的注入移动真的移动了光标（`+40` → 光标 `+30`） | ✅ |
+| 放行的注入点击到达了窗口（窗口收到 `WM_LBUTTONDOWN`） | ✅ |
+
+顺带两个实测细节：① 相对移动会被系统的"指针加速"缩放，注入 `dx=40` 光标只走 30 —— 所以
+判定移动是否放行要看**方向和量级**，不能要求精确等于注入值；② 这条与 §3 里"注册**键盘**
+Raw Input 会切断 LL hook"并不矛盾：那是 Raw Input 注册的副作用，不是钩子之间的干扰。
+
+便携模式因此**完全不需要 Raw Input**（它没有设备维度，设备身份没有用处），
+顺带避开了上面那个坑。
+
+---
+
 ## 4. 参数与启动流程（唯一权威版）
 
 ### 4.1 命令行
@@ -147,10 +172,11 @@ anykey-engine.exe <config.json> [--debug] [--backend=driver|llhook]
 
 | 操作 | 现有调用点 | driver 实现 | llhook 实现 |
 |---|---|---|---|
-| 构造 | `FilterDriver::open()` `main.rs:229`（心跳线程另有 `:366`） + `register_event()` `:238` | 现状 | 装钩子 + 起消息泵线程 + 建有界通道 |
+| 构造 | `FilterDriver::open()` `main.rs:229`（心跳线程另有 `:366`） + `register_event()` `:238` | 现状 | 装**两个**钩子（键盘 + 鼠标）+ 起消息泵线程 + 建有界通道 |
 | 输入等待 | `fd.poll_all(timeout)` `:587` | `WaitForSingleObject(h_event, timeout)`，超时返回空（`filter_driver.rs:526-541`） | `rx.recv_timeout(timeout)`，`Timeout` 映射成空元组 |
 | 键盘输出 | `fd.send_output(&AnyKeyOutputEvent)` `:447/450` | IOCTL | `emit.rs:101/120`（扫描码 + extended） |
-| 鼠标输出 | `fd.send_mouse_output(&AnyKeyMouseOutputEvent)` `:473/537` | IOCTL | 新增 SendInput 鼠标实现 |
+| 鼠标输入 | 与键盘同一次 `poll_all`（驱动是两个队列、同一次 poll 取走） | IOCTL | `WH_MOUSE_LL`，**纯移动放行、按键/滚轮入队**（与驱动同语义） |
+| 鼠标输出 | `fd.send_mouse_output(&AnyKeyMouseOutputEvent)` `:473/537` | IOCTL | `sendinput_out.rs`（SendInput） |
 | 设备变更 | `fd.get_status()` `:602` 的 `ANYKEY_FLAG_DEVICE_CHANGED` 位 | IOCTL（读状态顺带清一次性标志） | **固定返回"无变更"的成功值**；⚠️ 不可返回 `Err`，否则 `:609` 每轮打日志 |
 | 拦截开关 | `set_device_intercept(dev, on)` `:330/335/732/917/919` | 现状 | **空操作** —— llhook 的"闸门"就是钩子装上/卸下本身 |
 | 设备枚举 | `get_device_count()` `:383` + `registry.rs:85` 的 `Registry::init(&fd)` | IOCTL | 单设备桩（`all_devices = [0]`、`default_kbd/ms = 0`） |
@@ -205,7 +231,7 @@ impl Backend {
 | 文件 | 改动 |
 |---|---|
 | **新增 `src/backend.rs`** | `enum Backend { Driver(FilterDriver), LlHook(HookInput) }` + 按 §4.2 顺序构造的入口（构造逻辑写成纯函数便于单测） |
-| **新增 `src/hook_input.rs`** | 钩子安装 + **专用线程消息泵**（可复用 `app_sensor.rs:64/73-116` 的 `MsgWaitForMultipleObjectsEx` 模式）；回调内：`code != HC_ACTION` 或 `LLKHF_INJECTED` → 透传，否则按 §3.1 造事件推入**有界通道**（`try_send` 失败 → 直通降级 + 告警，**绝不在回调里等待**）；投影逻辑写成纯函数便于单测 |
+| **新增 `src/hook_input.rs`** | **`WH_KEYBOARD_LL` + `WH_MOUSE_LL` 两个钩子同线程安装**（§3.6 实测可共存）+ **专用线程消息泵**（`MsgWaitForMultipleObjectsEx` 模式，同 `app_sensor.rs:64/73-116`）；回调内：`code < 0` 或 `LLKHF_INJECTED`/`LLMHF_INJECTED` → 透传，否则按 §3.1 造事件推入**有界通道**（`try_send` 失败 → 直通降级 + 告警，**绝不在回调里等待**）；鼠标**移动**不进管道（与驱动「纯移动直接转发」一致）；投影逻辑写成纯函数便于单测 |
 | **新增 `src/sendinput_out.rs`** | 鼠标按键 / 滚轮 / 移动的 SendInput 实现；键盘直接转调 `emit.rs:101/120`；文本复用 `main.rs:736 send_unicode_text` |
 | `src/main.rs` | ① 参数解析改全 argv 扫描；② 启动按 §4.2 构造后端，把现有 ~10 处 `fd.*` 调用（`:229/238/244/255/330-339/587/602/732/854/917-923`）收敛到后端句柄之后；③ 输出出口分派（driver → IOCTL / llhook → SendInput）；④ 心跳线程（`:364`）在 llhook 模式下换成"钩子存活对账"（`GetLastInputInfo()` 与会话最后回调时间戳比对，前者推进而后者不动 = 钩子已被摘 → 重装 + 记日志）；⑤ 日志改追加（§6） |
 | `src/registry.rs:85` | `Registry::init(&fd)` 改为接受后端句柄；llhook 模式返回单设备桩（`all_device_ids = vec![0]`、`default_kbd/ms = 0`） |
@@ -270,7 +296,7 @@ impl Backend {
 |---|---|
 | **Step 0** | `main.rs` 参数解析改全 argv 扫描（修 `--debug` 被静默丢掉的隐患）+ 日志改追加。**先做的理由**：修的是现存隐患，不依赖任何新功能，风险最低。✅ 已做，提交 `03d4e2a` |
 | Step 1 | `backend.rs`：`enum Backend` + 薄方法，**行为完全不变**（等价重构）。✅ 已做，提交 `b85762c` |
-| Step 2 | `hook_input.rs`（钩子 + 消息泵 + 有界通道 + 1:1 投影）+ `sendinput_out.rs`（鼠标）+ `Backend::LlHook` 变体 + `--backend=` 参数与引擎内回退。✅ 已做，提交 `78a5e39` |
+| Step 2 | `hook_input.rs`（键盘+鼠标两个钩子 + 消息泵 + 有界通道 + 1:1 投影）+ `sendinput_out.rs`（鼠标输出）+ `Backend::LlHook` 变体 + `--backend=` 参数与引擎内回退。✅ 已做，提交 `78a5e39` / `b16c231` |
 | Step 3 | 日志补齐（requested / fallback / **首次钩子回调** / exit_reason） |
 | Step 4 | 托盘传参 + GUI 开关 + 配置字段 |
 | Step 5 | 收尾解耦（`registry` / `app_sensor` / `emit` / `current_device`；并把四个事件结构体从 `filter_driver.rs` 搬进中性模块，使两个新模块不再与 `filter-driver` 同 cfg） |
@@ -306,7 +332,9 @@ impl Backend {
 - **Win+L、Ctrl+Alt+Del、安全桌面（UAC 提示、登录界面）永远拦不到。**
 - **多键盘共用同一套映射**（无 device 维度）；GUI 在便携模式下应隐藏/禁用 device 相关设置。
 - **不提权运行时，提权窗口内映射静默不生效**（按键仍原生工作）；需要生效就以管理员身份启动 AnyKey。
-- **鼠标建议不接管移动**（高频事件走"吞 + 重放"是性能灾难；Kanata 为此专门做了位移累加）。
+- **鼠标移动不接管**（高频事件走"吞 + 重放"是性能灾难）：便携模式下鼠标**移动**原样透传，
+  只有**按键 / 滚轮**会被拦截重放 —— 这与驱动后端完全一致（驱动也是纯移动直接转发、不入管道）。
+- **鼠标按键/滚轮变成注入事件**：与键盘同理，过滤注入输入的软件可能不认。
 
 ---
 
@@ -426,6 +454,49 @@ impl Backend {
 
 **下一步**：Step 3 —— 日志补齐（`requested` / `fallback` / **首次钩子回调** / `exit_reason`）。本步已打了 `backend requested`、`WARN fallback -> llhook`、`Backend: X`、存活对账，尚缺"首次收到回调"这一行（钩子"装上"不等于"收得到"）与退出原因的完整覆盖。
 
+### Step 2b —— 补上鼠标拦截（提交 `b16c231`）
+
+用户要求便携模式必须支持鼠标拦截与输出，且事件模型与现有驱动后端对齐。
+
+**先核实前提（`tools/probe_llmouse.py`，五项全过）**
+
+把 `WH_KEYBOARD_LL` 与 `WH_MOUSE_LL` 装在**同一条线程**上、共用同一个消息泵，然后自动注入
+三类事件并核对。关键结论：**两个钩子可以共存**，键盘钩子不受鼠标钩子影响；鼠标钩子能看到
+按键与移动；放行的移动与点击都正常到达目标。详见 §3.6。
+
+**实现（对齐驱动的语义）**
+
+- `hook_input.rs`：新增 `ms_hook_proc`；通道载荷由 `AnyKeyInputEvent` 改成
+  `enum HookEvent { Key, Mouse }` —— **必须一条通道**，因为 `recv_timeout` 只能等一条，
+  两条通道会让"等键盘"和"等鼠标"互相阻塞。这个语义与驱动"两个队列、同一次 poll 取走"一致。
+- `project_mouse(msg, mouse_data) -> Option<(button_flags, button_data)>`（**纯函数 + 4 项单测**）：
+  钩子消息 → 驱动的 ntddmou 位。两个只有读 `MSLLHOOKSTRUCT` 才知道的细节：
+  ① **XBUTTON 的编号（1/2）藏在 `mouseData` 的高 16 位**，映射到驱动的 4/5 号键；
+  ② **滚轮增量是有符号的**（`mouseData` 高 16 位按 `i16` 解释，下滚 −120）。
+- **纯移动（`WM_MOUSEMOVE`）放行、不产生事件** —— 与驱动完全一致（`anykey_flt.c` 的注释原文
+  "Pure movement (ButtonFlags==0): forward to system immediately, no queue"）。这既对齐了语义，
+  也避开了"高频事件吞+重放"的性能灾难。
+- **不注册任何 Raw Input**：便携模式没有设备维度，设备身份没有用处 —— 顺带完全避开了
+  "注册键盘 Raw Input 会切断 LL hook"那个坑（§3 附录 B）。
+- `flags` 恒为 `MOUSE_MOVE_RELATIVE`、`last_x/last_y` 恒为 0：按键/滚轮包里没有位移语义，
+  驱动的那两个字段也不参与任何判定（引擎侧仅用于日志）。
+- **鼠标钩子装不上 → 整体失败**（返回 `Err`，由 main 报错退出）：用户明确要鼠标拦截，
+  静默降级会变成"以为能用"。
+- `HookLiveness` 增加 `mouse_edges` / `mouse_moves`：日志里能把"鼠标钩子死了"和
+  "键盘钩子死了"**分开**看，这直接决定了排查方向（例如提权窗口会让键盘路径静默、
+  但鼠标按键计数仍在增长 → 说明钩子机制本身活着）。
+- `sendinput_out.rs` 的 `XBUTTON1/2` 改成 `pub`：输入侧要从 `mouseData` 高 16 位**读**它、
+  输出侧要往 `mouseData` 里**写**它 —— 一处定义、两处共用（单一真源）。
+
+**验证**
+
+- `cargo test`：**126 项全绿**（16 组）= 上一版的 122 + 4 项鼠标投影测试；零警告；exe 正常产出。
+- 新增单测覆盖：三键按下/抬起、XBUTTON 编号来自高 16 位（含未知编号 → 放行）、
+  滚轮有符号增量（±120）、纯移动不投影。
+- **仍未做**：实机端到端冒烟（真敲键盘 + 真点鼠标，确认映射生效且注入不被打回）。
+
+**下一步**：Step 3 —— 日志补齐（`requested` / `fallback` / **首次回调** / `exit_reason`）。
+
 ### 2026-09-17 事故：`git switch` 让整个 `anykey-engine/src/` 从磁盘消失（两次）
 
 **现象**
@@ -483,7 +554,7 @@ update-ref refs/heads/main <commit> # 移动 main 指针
 | `RegisterHotKey` 当免注入闸门 | 只有 down 语义、无 keyup → 修饰键 / 长按 / tap-dance / combo 全做不了 |
 | 做成 TSF 输入法 | 载荷无设备字段（SDK 头文件原文）；按键接入槽是**单占位**、无"向下转交"原语；且必须数字签名 |
 | 键盘布局（HKL） | 只能改"这个键是什么意思"，**不能改"这个键存不存在"**（`_none_` 实测仍发 `WM_KEYDOWN vk=0xFF`）；且静态、per-thread、需管理员安装 |
-| 鼠标侧 | **不对称已实测**：钩子吞掉鼠标移动后 RawInput **仍照常投递**（光标冻结 Δ=0 而 RawInput 收到 327 包）→ 免驱动 + 鼠标按设备识别**机制上成立**，本轮不做 |
+| 鼠标按设备识别 | **不对称已实测**：钩子吞掉鼠标移动后 RawInput **仍照常投递**（光标冻结 Δ=0 而 RawInput 收到 327 包）→ 机制上成立，但便携模式没有设备维度，用不上；按键/滚轮拦截不走 Raw Input（见 §3.6） |
 
 ---
 
@@ -495,6 +566,7 @@ update-ref refs/heads/main <commit> # 移动 main 指针
 | `probe_dual.py` / `probe_ahk_cross.py` | 钩子吞键 → 被吞的键不再产生 `WM_INPUT`（双进程对照 + AHK 交叉验证） |
 | `probe_hook_combo.py` / `probe_hook_pump.py` | 同进程内注册键盘 Raw Input 会切断 LL hook 投递（与线程/顺序/窗口无关，可逆） |
 | `probe_mouse_swallow.py` | 鼠标移动与键盘**不对称**（吞掉后 RawInput 仍投递） |
+| `probe_llmouse.py` | **两个 LL hook 可在同进程/同线程共存**（键盘钩子不受鼠标钩子影响；放行的移动与点击正常到达）。判定移动时要看方向与量级，因为相对移动会被"指针加速"缩放 |
 | `probe_layout_erase.py` / `probe_layout_raw.py` | 布局把 `_none_` 变成 `vk=0xFF` 而非丢弃；布局改写发生在 RawInput 分支之前 |
 | `probe_kbdvsc.py` | 全量读 218 个布局的 `pusVSCtoVK`（判断"布局能否表达 X"） |
 | `probe_nolegacy.py` | `RIDEV_NOLEGACY` 会连带砍掉 `SendInput` 重放 |
