@@ -374,6 +374,53 @@ impl Backend {
 
 **下一步**：Step 2 —— `hook_input.rs`（钩子 + 专用线程消息泵 + 有界通道）与 `sendinput_out.rs`（SendInput 鼠标），并在 `backend.rs` 加 `LlHook` 变体。
 
+### Step 2 —— 免驱动后端落地（提交 `78a5e39`）
+
+**做了什么**
+
+| 文件 | 改动 |
+|---|---|
+| 新增 `anykey-engine/src/hook_input.rs`（428 行） | 钩子安装 + 专用线程消息泵 + 有界通道 + 1:1 投影 + 存活对账 |
+| 新增 `anykey-engine/src/sendinput_out.rs`（185 行） | 鼠标按键 / 滚轮 / 移动的 SendInput 实现（键盘复用 `emit.rs`） |
+| `backend.rs` | 加 `LlHook(HookInput)` 变体；单设备桩 `enum_devices`；纯函数 `choose_backend` / `parse_backend_kind` |
+| `main.rs` | `--backend=` 全 argv 扫描；§4.2 构造顺序（含驱动 open 重试与**引擎内回退**）；llhook 下强制 `perDevice=false`；心跳线程仅驱动；主循环存活对账；两处都失败退出码 1 |
+| `Cargo.toml` | 加 `Win32_System_SystemInformation` feature（`GetTickCount`） |
+| `lib.rs` | 声明两个新模块 |
+
+**关键实现决定（记下来，免得以后回头猜）**
+
+1. **钩子必须装在自己的线程上** —— 回调在"安装钩子的那条线程"上下发，且那条线程要有消息循环。所以钩子 + `MsgWaitForMultipleObjectsEx` 泵同住一条线程；线程退出 = 钩子失效，因此泵循环只在收到 `WM_QUIT` 时返回。
+2. **回调绝不阻塞**：判定 → `try_send` → 立即返回。通道满（管道失速）时**放行该键**（直通降级）—— 宁可这次不映射，也绝不丢键。**不要**学 Kanata 的 `try_send_panic`（回调里 panic = 键盘卡死）。
+3. **自注入过滤只认 `LLKHF_INJECTED` 一位，且必须放行**：本后端输出走 `SendInput`，会再次经过本钩子；吞掉它 = 自己的输出被自己吞掉 → 应用永远收不到键。**不打 `dwExtraInfo` 标记**（Kanata 也不打），少一层约定。
+4. **E1 缺口用 `vkCode` 补**：`KBDLLHOOKSTRUCT` 没有 E1 位（只有对应 E0 的 `LLKHF_EXTENDED`），而 Pause 与 NumLock 扫描码都是 `0x45` → 投影会把 Pause 变成 NumLock。两者虚拟键码不同（Pause `0x13` / NumLock `0x90`），用 `vkCode` 兜住这一个特例。这是本后端**唯一**一处投影不完整的地方。
+5. **llhook 模式下强制 `perDevice=false`**（只改内存副本、**不写回配置文件**）：否则用户配置里若 `perDevice=true` 且订阅的是真实设备（guid / VID:PID），伪设备 0 不在订阅集里 → 拿到的是**空映射（纯透传）** → 表现为"什么映射都不生效"。
+6. **存活对账用 `GetLastInputInfo()`** —— 它是系统级、**不经过本钩子**的独立见证（此前实测验证过）。判定式："系统侧最近输入发生在本地最后一次回调之后，且已持续 >5s"。主循环每 3s 检查一次，不健康时限流 30s 告警（前台在提权窗口时也会命中，属预期，日志里写明了）。
+7. **便携模式暂不接管鼠标输入**：同进程注册**键盘** Raw Input 会让 LL hook 立即停止被调用（附录 B 的实测），所以鼠标输入需要另想办法（独立进程或用鼠标钩子配 Raw Input —— 后者已实测不对称、机制上成立）。本期只做鼠标**输出**。
+8. **两个新模块暂时与 `filter-driver` 同 `cfg`**，因为事件结构体（`AnyKeyInputEvent` 等）还定义在 `filter_driver.rs` 里。这是 Step 5 的清理项，**不代表它们"属于驱动"**。
+
+**验证**
+
+- `cargo test`：**122 项全绿**（16 组）= 原有 110 + 新增 12；**零警告**；`anykey-engine.exe` 正常产出。
+- 新增的 12 项：6 项投影（普通键上/下、E0 扩展、PrintScreen 的 E0、Pause/NumLock 的 E1 区分、抬起位不被误置）+ 4 项后端选择与解析（`llhook` 恒不回退、`driver` 仅在不可用时回退、大小写与未知取值）+ 2 项坐标归一化（满量程与越界钳位）。
+
+**【环境级】编译死锁（已固化进跨项目记忆）**
+
+本机出现一个与代码无关的编译死锁，值得记下来，因为它会伪装成"编译很慢"：
+
+- **现象**：在**工作区目录内**链接出可执行文件（`.exe` / `.dll`）时，产物已经写出，但 rustc 进程**永不退出** —— CPU 时间恒定不变（实测 16 秒采样 `UserModeTime`/`KernelModeTime` 完全不动），并留下未清理的临时文件（`rmetaXXXXXX`、`rustcXXXXXX`、`*.rcgu.o`）。
+- **最小复现（决定性）**：同一条命令 `rustc --edition 2021 --out-dir <工作区内> main.rs` → 卡死；换成 `--out-dir %TEMP%\rtest` → **0.7 秒完成**。普通 bin、proc-macro crate、带不带 `-C prefer-dynamic` 都一样；**`--emit=metadata`（不链接）从不受影响**。
+- **判定**：**位置相关**，不是代码、不是工具链。最可能是工作区被文件监听（IDE / 桌面端）持有新生成二进制文件的句柄，使 rustc 收尾的删除动作被阻塞 —— 与 `git rm` / `git switch` 在工作区内删文件导致进程被杀是**同一类**问题。
+- **绕过**：把编译输出移出工作区 → `CARGO_TARGET_DIR=C:/Users/proje/AppData/Local/Temp/<name> cargo test`，随即一切正常（本次就是这么跑通的）。
+- **诊断手法**：怀疑是"卡住"而不是"慢"时，隔 10 秒采样两次进程 CPU 时间，**数值不动 = 死锁**；再看命令行参数判断卡在哪个 crate。
+- **两个易误判点**：① 本机 `cargo.exe` 常态有**两个**进程（`~/.cargo/bin/cargo.exe` 是 rustup **代理**，它会再起真正的 toolchain cargo），这是正常的，**不是**"两个构建在抢锁"；② 因为 `--emit=metadata` 不受影响，表现为**能 `cargo check` 但不能 `cargo build`**，很容易误判成编译慢。
+
+**未做的验证（需要真机人工）**
+
+- **最小映射端到端冒烟**：用真实配置以 `--backend=llhook` 起引擎，敲键盘确认映射生效、注入键到达应用。本步只做到"编译 + 单测通过"，**没有实机跑过钩子**。
+- §8 的 9 项实测（Alt+Tab / AltGr / CapsLock 翻转 / 非美式布局 / 中文 IME / 延迟 / Pause 保真 / 锁屏唤醒 / 自动化测试通路）。
+
+**下一步**：Step 3 —— 日志补齐（`requested` / `fallback` / **首次钩子回调** / `exit_reason`）。本步已打了 `backend requested`、`WARN fallback -> llhook`、`Backend: X`、存活对账，尚缺"首次收到回调"这一行（钩子"装上"不等于"收得到"）与退出原因的完整覆盖。
+
 ### 2026-09-17 事故：`git switch` 让整个 `anykey-engine/src/` 从磁盘消失（两次）
 
 **现象**
