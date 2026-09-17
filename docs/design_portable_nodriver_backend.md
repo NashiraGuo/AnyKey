@@ -234,6 +234,7 @@ impl Backend {
 |---|---|
 | **新增 `src/backend.rs`** | `enum Backend { Driver(FilterDriver), LlHook(HookInput) }` + 按 §4.2 顺序构造的入口（构造逻辑写成纯函数便于单测） |
 | **新增 `src/hook_input.rs`** | **`WH_KEYBOARD_LL` + `WH_MOUSE_LL` 两个钩子同线程安装**（§3.6 实测可共存）+ **专用线程消息泵**（`MsgWaitForMultipleObjectsEx` 模式，同 `app_sensor.rs:64/73-116`）；回调内：`code < 0` 或 `LLKHF_INJECTED`/`LLMHF_INJECTED` → 透传，否则按 §3.1 造事件推入**有界通道**（`try_send` 失败 → 直通降级 + 告警，**绝不在回调里等待**）；鼠标**移动**不进管道（与驱动「纯移动直接转发」一致）；投影逻辑写成纯函数便于单测 |
+| ✅ `src/hook_input.rs`（Step 6 补充） | **三个开关 + 一个纯判定**：`capture`（镜像入队）/ `swallow`（吞原事件）/ `accept_injected`（收下注入事件），由 `decide() -> {Pass, Mirror, Swallow}` 合成唯一判定；`HookOptions::production()` 与 `::for_test()` 是仅有的两种合法组合。原先「入队」与「吞键」焊在一起（A2），于是**无法只观察不吞** —— 而这正是自动化测试需要的能力。驱动后端一直有这个二分（`InterceptEnabled` / `CaptureEnabled`），所以这里是让两个后端对称，而不是为测试开特例 |
 | **新增 `src/sendinput_out.rs`** | 鼠标按键 / 滚轮 / 移动的 SendInput 实现；键盘直接转调 `emit.rs:101/120`；文本复用 `main.rs:736 send_unicode_text` |
 | `src/main.rs` | ① 参数解析改全 argv 扫描；② 启动按 §4.2 构造后端，把现有 ~10 处 `fd.*` 调用（`:229/238/244/255/330-339/587/602/732/854/917-923`）收敛到后端句柄之后；③ 输出出口分派（driver → IOCTL / llhook → SendInput）；④ 心跳线程（`:364`）在 llhook 模式下换成"钩子存活对账"（`GetLastInputInfo()` 与会话最后回调时间戳比对，前者推进而后者不动 = 钩子已被摘 → 重装 + 记日志）；⑤ 日志改追加（§6） |
 | ✅ **新增 `src/events.rs`** | 两个后端共用的 I/O 词汇，**无 cfg** —— 详见 §5.4（Step 5） |
@@ -357,7 +358,7 @@ impl Backend {
 | **延迟**（每键多一跳） | 用 `tools/keylatency` 探针测 |
 | **Pause/Break（E1 键）保真度** | §3.1 的已知缺口，确认影响面是否只限这一个键 |
 | **快速用户切换 / 锁屏 / 睡眠唤醒** | 钩子是 per-desktop/session；确认恢复后状态一致、无卡键 |
-| **自动化测试通路** | 用**驱动在 dev 模式注入"无注入标记"的键**来驱动便携后端的钩子（驱动注入等同物理键）；投影逻辑另写纯函数做单测，否则每次回归都要人工敲键盘 |
+| **自动化测试通路** | ✅ **已做，且不必用驱动**（Step 6）：`tests/llhook_backend_test.rs` 用 `HookOptions::for_test()`（只观察不吞 + 接受注入）装钩子，再用 `SendInput` 注入 F13/滚轮，验证 投影 → 通道 → `poll_all` → 管道映射 → 输出回流。**全自动、不需要驱动/管理员/人工**，且不影响本机键盘。原计划的「用驱动注入无标记键」仍可作为另一种路径（`tools/probe_drv_inject_to_hook.py`，需要退出 AnyKey 才能跑），但已不是必需 |
 
 ---
 
@@ -753,8 +754,51 @@ Step 6（打包便携 ZIP + README 能力对照表）。
 2. **不加 `llhook-backend` feature、不做 cfg 分叉** —— 没有这样的构建目标，`main` / `registry` 仍要求特性；本步目标是「cfg 不说谎」，已达成。
 
 **⚠️ 又踩了一次同一个坑**：改注释时用内联 `python -c "…"`，字符串里含反引号 → 被 bash 当**命令替换**执行（`Broker: command not found`），替换结果为空、断言才拦住。教训重申（跨项目记忆里已有）：**凡改动文本含反引号 / `$` / `!`，一律先写补丁文件再执行**。同类：`git commit -F -` 的 heredoc 也会被 shell 包装层的 eval 弄坏（消息里的双引号）→ **提交消息写文件后 `git commit -F <file>`**。
+### Step 6（部分）—— 回答「llhook 到底测了什么」，并把缺口补上（提交 `bfd4224`）
+
+**起因**：用户问「驱动后端完全没变吧？测试还是用驱动后端吗？llhook 有没有真的通了 的测试？」
+
+**核实结论（读代码得出，不是推测）**
+
+| 问题 | 答案 |
+|---|---|
+| 驱动后端变了吗 | 行为未变。Step 5 的语义性改动只有 4 处：`KEY_E0/E1` 换成 `ANYKEY_KEY_E0/E1`（同值改名）、`emit_layer_*` 的硬编码 `1` → `self.current_device`、`current_device` 初值 `1` → `0`、以及搬迁本身。前两处 main 侧不读该字段；初值那处只影响「引擎启动后、**任何输入之前**就发生 app 切换」这一瞬态，而 `get_mapping(0,app)` 与 `get_mapping(1,app)` 走完 `build_multi_device_contexts` → `apply_app_override` 后结果相同（两者都查不到设备覆盖 → 落到全局 base 映射），也不会 panic（`subscribed=[0]` 时 `contexts.get(&0)` 必然存在） |
+| `cargo test` 里的测试用哪个后端 | **都不用**。13 个 `tests/*.rs` 全部直接驱动 `PipelineState`（`key_down`/`key_up`），不构造任何后端。唯一碰驱动的是 8 个 `examples/test_*.rs` —— 手工硬件探针，`cargo test` 不编译它们（改过 example 要单独 `cargo build --examples`） |
+| llhook 有哪些测试 | 三层：① 16 个单元测试（`project` 7 + `project_mouse` 3 + `sendinput_out` 坐标归一化 2 + `backend` 取值规则 4）；② `tools/check_logging_step3.py`（全自动，起真引擎跑 `--backend=llhook`，核对日志六行 + 强杀读法，靠"注入一次滚轮"证明钩子收到回调）；③ `tools/smoke_llhook.py`（**需人工按键**，唯一覆盖完整链路） |
+| **缺口** | 钩子 → 回调 → 通道 → `poll_all` → 管道 → 输出 这条**接线**没有自动化覆盖。第 ①层只测纯函数，第 ②层不碰映射，第 ③层要人 |
+
+**做了什么**
+
+1. `hook_input.rs`：把「入队」与「吞键」拆开（原来焊在 `swallow` 一个开关上，A2 决策），
+   得到 `capture` / `swallow` / `accept_injected` 三个开关 + 纯函数
+   `decide() -> {Pass, Mirror, Swallow}`；`HookOptions::production()` / `::for_test()` 两个构造函数；
+   `install_with()`，`install()` 变成生产简写；`Drop` 连 `capture` 一起清（退役时不再往没人读的通道灌）。
+   **判定的正确性在这里是要命的**（吞错 = 键盘失灵），所以它拿到 4 个真值表单测，而不是埋在
+   `extern "system"` 回调里。
+2. 新增 `tests/llhook_backend_test.rs`（一个 test fn —— `SHARED` 是 `OnceLock`，同进程只能装一份钩子）：
+   装钩子（`for_test()`，**只观察**）→ 注入 F13 down/up → 断言投影结果 → 注入滚轮 → 断言进同一条通道
+   → `liveness()` 非零 → 把拿到的事件喂进 `PipelineState` → 断言 `emit_log` 里有映射后的键
+   → `send_output` 发一个键 → **断言它又穿回我们的钩子**（这条正是生产必须过滤注入事件的理由）。
+   用 F13/F14 是因为 Windows 上没有任何应用响应它们 → 注入不会在任何人窗口里留字符。
+
+**验证**：`cargo test` **131 项全绿、零警告**（17 组 = 原 126 + 4 项 `decide` 真值表 + 1 项接线测试）。
+**在 AnyKey 正跑着（驱动处于拦截态）的情况下也通过** —— 顺带实测到：SendInput 注入的键不经过驱动，
+所以驱动拦截不影响它。
+
+**过程中踩的三个坑（都写进测试注释了）**
+1. `poll_all` 会**把整批取走**，"轮询到第一个匹配就返回"会丢掉同批的其余事件 —— 第一版就这样丢了 key-up。
+   改成"收集一个时间窗再按扫描码筛"。
+2. `commit.rs::is_valid_key_name()` 要求 `{X}` 多字符时必须在 scancode / 鼠标键名表里，
+   而两张表只到 `f12` —— 输出写成 `{f14}` 会**被静默丢弃**（映射建好后 resolver 拒绝输出，
+   `emit_log` 为空、没有任何报错）。测试改用 `{lshift}`（合法且单独按一下无任何副作用）。
+   ⚠️ 顺带发现一个**用户侧隐患**：非法输出名只在 `--debug` 日志里留一行 `UNKNOWN KEY: {…}`，
+   平时完全静默。建议后续在配置加载时校验一次并告警（或 GUI 保存时校验）。
+3. 「驱动注入无标记键」（原 §8 计划）这条前提仍未实测 —— 探针 `tools/probe_drv_inject_to_hook.py`
+   已写好，但它要求驱动**不处于拦截态**（即先退出 AnyKey），而用户当时正在用 AnyKey，
+   探针正确地拒绝了执行。现在自动化不再依赖这条路径，所以它降级为「可选复核」。
 
 ---
+
 
 ## 附录 A：被否决的路线（一句话，防止重走）
 
@@ -789,4 +833,6 @@ Step 6（打包便携 ZIP + README 能力对照表）。
 | `doc_to_main.py` | 用 git 底层命令把文档提交到 main —— **本机 `git switch` 会毁工作区**（见 §10 事故记录），所以不切分支 |
 | `probe_backend_switch.py` | 后端开关 × 设备栏联动的**判据回归**：8 组真值表 + 控件 `state` + 文案归类 + 变量未被改写。假 self + 真 CTk 控件，快、不出窗口，rc 0/1 可进 CI |
 | `smoke_backend_switch_e2e.py` | **真 AnyKeyApp + 临时配置**：`backend` 字段的 4 组保存规则（含「驱动不可用时不覆盖意图」「灰 ≠ 清空」），并 md5 证明**用户真实配置未被改动** |
+| `tests/llhook_backend_test.rs`（在仓内，非 tools/） | **便携后端的接线测试**（Step 6）：投影 → 通道 → `poll_all` → 管道映射 → 输出回流。全自动、不需驱动/管理员/人工，装钩子时 `swallow=false` 故不影响本机键盘 |
+| `probe_drv_inject_to_hook.py` | 核实「驱动注入能否当便携后端的物理键」（设计 §8 的原计划前提）：对比驱动注入与 SendInput 注入在钩子处的 `INJECTED` 标志。**要求驱动不处于拦截态**（先退出 AnyKey），否则探针主动放弃执行。现已成为可选复核 |
 | `check_tray_backend_arg.py` | **托盘 → 引擎的参数传递**：在 %TEMP% 造隔离沙箱（托盘/引擎副本 + 最小空映射配置），读引擎日志的 argv 行确认 `--backend=` 取值正确；两轮（llhook / 缺省） |
