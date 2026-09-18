@@ -273,7 +273,7 @@ impl Backend {
 | 模块 | 内容 | cfg |
 |---|---|---|
 | ✅ **`src/events.rs`**（新增，216 行） | 四个事件结构体（`AnyKeyInputEvent` / `AnyKeyOutputEvent` / `AnyKeyMouseEvent` / `AnyKeyMouseOutputEvent`）、设备清单负载（`AnyKeyDeviceInfo` / `AnyKeyEnumDevicesRequest`）、`ANYKEY_KEY_*`、`MOUSE_*`（按钮 + 移动标志）、`ANYKEY_DEV_FLAG_*`、`MouseEventTranslator` | **无** |
-| ✅ `src/filter_driver.rs`（763 → 585 行） | 驱动协议：IOCTL 码、`FilterDriver` 句柄与全部方法、心跳/状态/拦截请求结构、`ANYKEY_STATE_*`、`ANYKEY_FLAG_DEVICE_CHANGED` | `filter-driver` |
+| ✅ `src/filter_driver.rs`（763 → 546 行） | 驱动协议：IOCTL 码、`FilterDriver` 句柄与全部方法、状态/拦截请求结构、`ANYKEY_FLAG_DEVICE_CHANGED`（2026-09-18 v0.5 又删掉心跳与 `ANYKEY_STATE_*`，见 §10） | `filter-driver` |
 | ✅ `src/hook_input.rs`、`src/sendinput_out.rs` | 免驱动输入 / 输出 | **无**（本步摘掉） |
 | ✅ `src/app_sensor.rs` | 前台窗口感知 | **无**（本步摘掉） |
 | `src/backend.rs` | 后端抽象 | `filter-driver` —— 只有 `Driver` 变体需要驱动句柄；同一个 enum 不能一半带特性一半不带 |
@@ -375,7 +375,7 @@ impl Backend {
   只有**按键 / 滚轮**会被拦截重放 —— 这与驱动后端完全一致（驱动也是纯移动直接转发、不入管道）。
 - **鼠标按键/滚轮变成注入事件**：与键盘同理，过滤注入输入的软件可能不认。
 - **紧急脱离快捷键在便携模式下由钩子实现**（2026-09-18 补）：同一套语义 —— LCtrl+Space+Esc 三键同时按住 → **立即结束引擎进程**，钩子随进程消失、键鼠恢复原生。实现在 `hook_input.rs` 键盘回调里、**先于一切判定**（对应驱动 `EMERGENCY COMBO CHECK` 那个 "highest priority" 的位置），因此引擎主线程死锁时仍然有效；只看物理键（注入事件不计入，否则 AnyKey 自己输出的这三个键会把引擎杀掉），只认左 Ctrl（E0 的右 Ctrl 不计入）。详见 §10。
-- **没有 30s 心跳看门狗**：`main.rs` 的心跳线程只在 driver 后端 spawn（`:500-528`），llhook 下启动日志写 `heartbeat/watchdog n/a`（`:363`）。也就是说便携模式**没有"无人值守的自动恢复"** —— 键盘失灵时需要用户自己按上面的紧急键。
+- **没有「无人值守的自动恢复」**：心跳与 30s watchdog 已于 2026-09-18 **整体删除**（驱动 v0.5）—— 两个后端都没有了。键盘失灵时需要用户自己按上面的紧急键。
 - **另外两条安全边界**：钩子随进程退出自动卸载、钩子回调绝不阻塞（队列满则原样放行）。⚠️ **存活对账当前只告警、不重装钩子**（见 §10 遗留项）。
 
 ---
@@ -824,7 +824,7 @@ Step 6（打包便携 ZIP + README 能力对照表）。
 
 **为写准这几段而专门核实的事实**（此前只有印象、没有依据）：
 
-1. **心跳线程在便携模式下直接退出**：`main.rs:500-515` 打开 `\\.\AnyKeyFlt` 失败即打 `HEARTBEAT: …` 并 `return`；llhook 启动日志写 `heartbeat/watchdog n/a`（`:363`）。
+1. **心跳线程在便携模式下直接退出**：`main.rs` 打开 `\\.\AnyKeyFlt` 失败即打 `HEARTBEAT: …` 并 `return`。（⚠️ 这是**当时**的事实；v0.5 已把心跳与 watchdog 整体删除，见下方 v0.5 记录。）
 2. **紧急脱离快捷键（LCtrl+Space+Esc）不可用于便携模式**：它实现在驱动的 `ServiceCallback`（DISPATCH_LEVEL）。
 
 **校验**：两版 README 行尾仍为纯 LF（CRLF=0）；文档内全部 `](#锚点)` 均可解析；对照表两版均 12 行、列数一致。
@@ -845,7 +845,7 @@ Step 6（打包便携 ZIP + README 能力对照表）。
 **做了什么**（`hook_input.rs`）
 
 1. 三个纯函数/常量：`emergency_bit(scan_code, extended) -> Option<u8>`、`emergency_after(mask, bit, is_up) -> u8`、`EMERG_TRIGGER = 0b111`。语义与驱动的 `EMERGENCY COMBO CHECK` 逐条对齐：LCtrl `0x1D` / Space `0x39` / Esc `0x01`，**只认非 E0 变体**（右 Ctrl 的 MakeCode 同样是 `0x1D`，但带 E0，不计入）。
-2. 回调里插在 `decide()` **之前**（对应驱动 "highest priority, before heartbeat" 的位置）；状态是 `Shared.emergency: AtomicU8` 位掩码，只用原子 or/and —— **不加锁、不分配、不写日志**，因为这段必须能在主线程已死锁时照常工作。
+2. 回调里插在 `decide()` **之前**（对应驱动 `EMERGENCY COMBO CHECK` 的 "highest priority" 位置）；状态是 `Shared.emergency: AtomicU8` 位掩码，只用原子 or/and —— **不加锁、不分配、不写日志**，因为这段必须能在主线程已死锁时照常工作。
 3. **只看物理键**：带 `LLKHF_INJECTED` 的事件不参与判定。否则 AnyKey 自己输出 LCtrl/Space/Esc 时会把自己杀掉。（驱动天然如此 —— 它只看得见物理键。）
 4. 触发 → `emergency_exit()`：`TerminateProcess` **立即结束进程**（`abort` 兜底）。**刻意不走 Drop** —— 主线程死锁时 `Drop` 根本不会执行；而进程一旦消失，Windows 会自动摘除本进程装的所有钩子，键鼠立刻恢复原生。这也顺带解释了为什么"停止是硬杀、可接受"这条既有结论在这里正好成立。
 5. 5 个真值表单测：只认左变体 / 忽略其它键 / 三键同按才触发 / 非重叠按不触发 / 抬起只清自己那一位。⚠️ 真正的触发路径**不可测**（会把进程杀掉，且注入事件不参与判定，造不出物理按键）—— 只测纯函数。
@@ -857,6 +857,30 @@ Step 6（打包便携 ZIP + README 能力对照表）。
 **未做**（用户明确「只做 A」）：用户态看门狗线程（主循环超时 → 自动退出）。因此便携模式仍缺"无人值守的自动恢复"，需要用户按紧急键。
 
 **已知副作用**：紧急键命中时进程被硬终止，**不会留下日志**（回调里不能做 I/O）。用户只能从托盘发现引擎已退出。
+
+### v0.5 —— 删除心跳与 watchdog（2026-09-18，用户决定）
+
+**决策依据**（先核实、后拍板）：心跳的**唯一消费者就是 watchdog**（引擎侧心跳线程只在 driver 后端 spawn、返回值直接丢弃；驱动侧 `IOCTL_ANYKEY_HEARTBEAT` 只做「刷新 `LastHeartbeat`」+「回填自检结构」）。watchdog 覆盖的是「整个进程连心跳线程都冻结」这一极罕见场景（实测从未触发），而紧急组合键在两种模式下都能覆盖"键盘失灵"。**代价明确**：不再有「无人值守的自动恢复」——但用户接受。
+
+**改动清单**（6 个文件；全部走补丁脚本 `tools/patch_remove_heartbeat.py` + `..._2.py`，27 处编辑）
+
+| 文件 | 删除/修改 |
+|---|---|
+| `sys/anykey_flt.c` | `SessionActive` / `LastHeartbeat` / `ANYKEY_HEARTBEAT_TIMEOUT_SECONDS` / 键盘与鼠标两处 watchdog 判断 / `IOCTL_ANYKEY_HEARTBEAT` handler / 初始化与 Cleanup 里的复位；`EmergencyShutdown` 头注释改为 "emergency stop"；启动横幅 `v0.2.0` → `v0.5.0`（**原本就与实际版本不符**，顺手修） |
+| `sys/public.h` | 删 `IOCTL_ANYKEY_HEARTBEAT`(+6) / `ANYKEY_HEARTBEAT_RESPONSE` / `ANYKEY_STATE_*`；`ANYKEY_DRIVER_VERSION` → `0x00050000` |
+| 两份 INF | `DriverVer` → `09/18/2026,0.5.0.0` |
+| `src/filter_driver.rs` | 删 `IOCTL_ANYKEY_HEARTBEAT` / `AnyKeyHeartbeatResponse` / `ANYKEY_STATE_*` / `FilterDriver::heartbeat()` |
+| `src/main.rs` | 删心跳线程块；llhook 启动日志措辞改为 "no driver heartbeat/watchdog" |
+| `examples/` | 删 `test_heartbeat_idle.rs`、`test_heartbeat_watchdog.rs`（专测被删功能）；`test_filter_driver.rs` 两处注释改为不依赖 watchdog 的说法 |
+
+**保留**：`AnyKey_EmergencyShutdown` —— 紧急组合键仍用它（关拦截 + flush 队列 + 注入 8 个修饰键 BREAK + 5 个鼠标键 UP）。
+
+**验证**：`cargo test` **136 项全绿、零警告**（17 suite）+ `cargo build --examples` 零警告；驱动 `build_driver_release.py` **RC=0**（cl/link + 测试签名 + 部署 `deploy/anykey_flt.sys`，26.5 KiB）。
+
+**踩的两个坑（补丁脚本的断言救了一次，另一次漏网）**
+
+1. ✅ **断言先后拦下两次错误定位**：① `g_AnyKey.SessionActive = FALSE;` 后跟 `LastHeartbeat.QuadPart = 0;` 在 **DriverEntry 初始化**与 **EmergencyShutdown 末尾**各有一处（两处形式完全相同！）→ 只能先删 EmergencyShutdown 那处（靠 `// 5. Reset session state` 注释定位）再删 DriverEntry 那处；② `if planned == BackendKind::Driver {` 在 main.rs 里也有两处 → 改成"心跳块起始之后第一次出现"。**零副作用**（写盘统一在末尾）。
+2. ⚠️ **跨行字符串替换必须连结束符一起换**：把 llhook 启动日志（`log!("…\` + 续行 `…");`）换成两行时**漏写了 `");`**，导致从该处起整个 `main.rs` 的引号配对错位 → **51 个语法错误**，且报错行散落在 765/944/971 等毫不相关的位置（`unterminated character literal`、`character literal may only contain one codepoint`），极具误导性。教训：**改跨行字符串后先单独 `cargo check` 拿到第一现场，别等全量测试**；判断依据是"错误数量远超改动量"就应怀疑字符串没闭合。
 
 ---
 

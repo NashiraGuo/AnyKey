@@ -57,8 +57,8 @@ The release package ships both — **whether to install the driver is your call*
 1. It turns **the whole keyboard** into "swallow and replay" — every keystroke is intercepted first and then sent back to the system as an injected event. So any software that **rejects injected input** (some game anti-cheat, banking security controls, hardened password fields) may never see your keys;
 2. It **cannot coexist with other LL hook tools** (AutoHotkey, espanso, hook features built into IMEs): whichever hook is installed last wins, showing up as dead hotkeys or double triggers.
 
-Portable mode **has the emergency escape hotkey**: the same **hold LCtrl+Space+Esc**, except it lives in the hook layer rather than in the kernel — pressing it terminates the engine process at once, the hooks go away with it, and keyboard/mouse return to native behaviour immediately. That makes it effective in both "keyboard stops responding" scenarios: a deadlocked main thread (callbacks are still invoked) and a bad config that swallows keys. The only thing it **lacks** is the 30s heartbeat watchdog (the driver's automatic recovery).
-Two further safety properties: hook callbacks never block (when the queue is full the original key passes through), and the main loop cross-checks hook liveness and logs a warning.
+Portable mode **has the emergency escape hotkey**: the same **hold LCtrl+Space+Esc**, except it lives in the hook layer rather than in the kernel — pressing it terminates the engine process at once, the hooks go away with it, and keyboard/mouse return to native behaviour immediately. That makes it effective in both "keyboard stops responding" scenarios: a deadlocked main thread (callbacks are still invoked) and a bad config that swallows keys. Heartbeat and the 30s watchdog were removed entirely in v0.5 (they only covered "the whole process freezes, heartbeat thread included", which never fired in practice), so **neither mode has unattended automatic recovery** — hold the combo if the keyboard stops responding.
+It also has two safety properties: hook callbacks never block (when the queue is full the original key passes through), and the main loop cross-checks hook liveness and logs a warning.
 
 ---
 
@@ -76,7 +76,7 @@ Two further safety properties: hook callbacks never block (when the queue is ful
 - **Device + application aware runtime**: different mappings per device/app; input state shared across devices by domain
 - **Device whitelist**: filter by VID/PID; non-whitelisted devices pass through completely untouched
 - **GUI configurator**: CustomTkinter graphical interface, WYSIWYG editing of the config
-- **Fail-safe net**: three independent defenses against engine crash, heartbeat loss, and main-thread deadlock, plus a kernel-level emergency escape hotkey
+- **Fail-safe net**: two independent defenses against engine crash and main-thread deadlock, plus an emergency escape hotkey (kernel-level on the driver backend, hook-level in portable mode)
 
 ---
 
@@ -147,15 +147,14 @@ Three installation steps:
 
 **Emergency escape hotkey (LCtrl + Space + Esc)**: hold all three keys **simultaneously** to trigger an immediate emergency stop — interception off, input queues flushed, all held modifiers released, state reset. Only the **left Ctrl** counts (E0-prefixed right Ctrl is ignored) to prevent accidental triggers. Because it lives in the driver's `ServiceCallback` (DISPATCH_LEVEL, in the path of every keystroke), it works even when the engine's main thread is deadlocked and user-mode code cannot run. **In portable mode the same semantics are implemented in the engine's hook callback** (hold all three → the engine process terminates at once, its hooks disappear, input returns to native behaviour), again looking only at physical keys and only at the left Ctrl.
 
-AnyKey is an "input gateway" — if the engine/driver hangs, the whole keyboard locks up. That's why three defenses with **mutually independent detection signals** are built in:
+AnyKey is an "input gateway" — if the engine/driver hangs, the whole keyboard locks up. That's why two defenses with **mutually independent detection signals** are built in:
 
 | Layer | Trigger | Mechanism | Location |
 |----|---------|------|---------|
 | Session | Engine process exits/gets killed | Kernel sees handle close → EvtFileCleanup → interception off immediately | `anykey_flt.c` |
-| Heartbeat | Engine heartbeat thread stalls (deadlock) | 30s without heartbeat IOCTL → emergency stop | `anykey_flt.c` + `main.rs` heartbeat thread (every 5s) |
-| **Emergency escape hotkey** | Main thread deadlocked but heartbeat still alive (no automatic layer fires) | Hardware-level combo, bypasses the engine entirely | Built into the filter driver |
+| **Emergency escape hotkey** | Main thread deadlocked (the Session layer doesn't fire) | Hardware-level combo, bypasses the engine entirely | Built into the driver; hook layer in portable mode (see top of 4.1) |
 
-> **In portable mode**: the emergency escape hotkey is still available, but implemented in the hook layer — the same LCtrl+Space+Esc, which terminates the engine process so its hooks disappear and input is restored at once. The 30s heartbeat watchdog has no counterpart. See the end of [Two Run Modes](#two-run-modes).
+> **Difference between the two modes**: the emergency escape hotkey exists in both — kernel-level on the driver backend, hook-level in portable mode, the same LCtrl+Space+Esc. **Heartbeat and the 30s watchdog were removed entirely in v0.5**, so **neither** mode offers unattended automatic recovery: press the combo to recover. See the end of [Two Run Modes](#two-run-modes).
 
 ### 4.2 System Tray
 
@@ -507,7 +506,7 @@ python -m gui.main             # launch the configurator
 
 **Privacy**: all key processing happens locally — no telemetry, no network reporting, keystroke data never leaves your machine.
 
-**Fail-safes**: three layers (process-exit Session interception-off / 30s heartbeat watchdog / kernel-level LCtrl+Space+Esc emergency escape) — see 4.1.
+**Fail-safes**: two layers (process-exit Session interception-off / LCtrl+Space+Esc emergency escape) — see 4.1.
 
 **Portable mode**: loads no kernel component at all — everything happens inside your own process, still with no telemetry and no network. Note that its keystrokes are all sent back as injected events, which some software may ignore — see [Two Run Modes](#two-run-modes).
 
