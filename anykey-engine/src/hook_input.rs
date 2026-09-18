@@ -69,13 +69,15 @@ use crate::events::{
 // XBUTTON1/2 的系统定义只在 ntddmou / winuser 头里，windows-sys 未导出；
 // 单一来源放在 sendinput_out.rs（输出侧也要用），这里引用同一份。
 use crate::sendinput_out::{XBUTTON1, XBUTTON2};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::OnceLock;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{GetLastError, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::SystemInformation::GetTickCount;
-use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, GetCurrentThreadId, TerminateProcess,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP,
@@ -134,6 +136,9 @@ struct Shared {
     mouse_moves: AtomicU64,
     /// 泵线程 id（Drop 时 PostThreadMessageW(WM_QUIT) 用）。
     pump_tid: AtomicU32,
+    /// 紧急组合键的按键状态掩码（`EMERG_BIT_*` 的或）。回调里只做原子的 or/and ——
+    /// 不加锁、不分配、不写日志：这个判定**必须能在主线程已死锁时照常工作**。
+    emergency: AtomicU8,
 }
 
 static SHARED: OnceLock<Shared> = OnceLock::new();
@@ -193,6 +198,57 @@ impl HookOptions {
     /// （测试只能靠 SendInput 造输入）。
     pub fn for_test() -> Self {
         Self { capture: true, swallow: false, accept_injected: true }
+    }
+}
+
+// ── 紧急退出组合键（纯函数，可单测） ──
+//
+// 与驱动后端的 `LCtrl+Space+Esc` 是**同一套语义**（对应 `anykey_flt.c` 的
+// `EMERGENCY COMBO CHECK`）：三键**同时按住**才触发；只认左 Ctrl（右 Ctrl 同样是
+// 扫描码 0x1D，但带 E0 前缀，不计入）。
+//
+// 为什么钩子后端必须有它：钩子是"吞掉再重放"，一旦引擎主线程死锁，被吞的键既不会被
+// 处理也不会被放行（前 `CHANNEL_CAP` 个事件直接消失，之后才直通降级）—— 而驱动后端
+// 此时还有内核侧的紧急键兜底，钩子后端本来是**一个逃生门都没有**的。这个判定放在
+// 回调里、先于一切其它逻辑，所以主线程卡死时它仍然有效。
+//
+// ⚠️ 只看物理键：带 `LLKHF_INJECTED` 的事件不参与判定，否则 AnyKey 自己输出
+// LCtrl/Space/Esc 时会把引擎杀掉（驱动后端天然如此 —— 它只看得见物理键）。
+
+/// 左 Ctrl 按住 → 掩码位。
+pub const EMERG_BIT_LCTRL: u8 = 0b001;
+/// Space 按住 → 掩码位。
+pub const EMERG_BIT_SPACE: u8 = 0b010;
+/// Esc 按住 → 掩码位。
+pub const EMERG_BIT_ESC: u8 = 0b100;
+/// 三键同时按住 = 触发。
+pub const EMERG_TRIGGER: u8 = 0b111;
+
+// 扫描码（MakeCode，不含 E0 前缀）。
+const SC_LCTRL: u16 = 0x1D;
+const SC_SPACE: u16 = 0x39;
+const SC_ESC: u16 = 0x01;
+
+/// 这个扫描码是不是紧急组合键的成员？是则返回它的掩码位。
+/// `extended` 传 `LLKHF_EXTENDED`，用来排除 E0 变体。
+pub fn emergency_bit(scan_code: u16, extended: bool) -> Option<u8> {
+    if extended {
+        return None;
+    }
+    match scan_code {
+        SC_LCTRL => Some(EMERG_BIT_LCTRL),
+        SC_SPACE => Some(EMERG_BIT_SPACE),
+        SC_ESC => Some(EMERG_BIT_ESC),
+        _ => None,
+    }
+}
+
+/// 按下/抬起一个成员之后的掩码。结果 == `EMERG_TRIGGER` 即触发。
+pub fn emergency_after(mask: u8, bit: u8, is_up: bool) -> u8 {
+    if is_up {
+        mask & !bit
+    } else {
+        mask | bit
     }
 }
 
@@ -284,6 +340,25 @@ unsafe extern "system" fn kb_hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM
         sh.last_cb_tick.store(GetTickCount(), Ordering::Relaxed);
         let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
         let flags = kb.flags;
+
+        // ── 紧急退出组合键：先于一切判定（对应驱动里 "highest priority" 的位置）──
+        // 只看物理键：注入事件不计入，否则 AnyKey 自己输出 LCtrl/Space/Esc 会自杀。
+        if flags & LLKHF_INJECTED == 0 {
+            let extended = flags & LLKHF_EXTENDED != 0;
+            if let Some(bit) = emergency_bit(kb.scanCode as u16, extended) {
+                let is_up = flags & LLKHF_UP != 0;
+                let prev = if is_up {
+                    sh.emergency.fetch_and(!bit, Ordering::SeqCst)
+                } else {
+                    sh.emergency.fetch_or(bit, Ordering::SeqCst)
+                };
+                if emergency_after(prev, bit, is_up) == EMERG_TRIGGER {
+                    // 先清状态再退出（与驱动一致：避免重入）。
+                    sh.emergency.store(0, Ordering::SeqCst);
+                    emergency_exit();
+                }
+            }
+        }
 
         // 唯一判定入口（纯函数，真值表见 decide()）：注入过滤 → 闸门 → 吞/放。
         let action = decide(
@@ -509,6 +584,7 @@ impl HookInput {
                 mouse_edges: AtomicU64::new(0),
                 mouse_moves: AtomicU64::new(0),
                 pump_tid: AtomicU32::new(0),
+                emergency: AtomicU8::new(0),
             })
             .map_err(|_| "llhook backend already installed in this process".to_string())?;
 
@@ -649,6 +725,21 @@ impl Drop for HookInput {
 }
 
 /// `GetTickCount() - GetLastInputInfo().dwTime`，即"距上一次系统级输入过了多久"。
+/// 紧急退出：**立即结束本进程**，正常情况下不返回。
+///
+/// 为什么不走正常退出路径：
+/// - 它可能运行在"引擎主线程已经死锁/冻结"的时刻 —— `Drop` 根本不会被执行，指望它去
+///   `UnhookWindowsHookEx` 是不成立的；
+/// - **进程一旦消失，Windows 会自动摘除本进程安装的所有钩子**，键鼠立刻恢复原生行为，
+///   这正是要的效果（也是"停止是硬杀、可接受"这条既有结论的直接应用）；
+/// - `TerminateProcess` 不执行 DLL 清理，是钩子回调上下文里最安全的死法
+///   （`ExitProcess` 会跑 atexit 与 DLL detach，在回调里可能死锁）。
+unsafe fn emergency_exit() -> ! {
+    TerminateProcess(GetCurrentProcess(), 0);
+    // 自杀理论上不会失败；真失败了也绝不能继续吞键。
+    std::process::abort()
+}
+
 fn system_idle_ms(now: u32) -> u32 {
     let mut lii = LASTINPUTINFO {
         cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
@@ -789,5 +880,71 @@ mod decide_tests {
         // 两者都入队，只有返回值不同 —— 这正是"入队"与"吞键"解耦后的语义。
         assert_eq!(decide(false, true, false, false), HookAction::Mirror);
         assert_eq!(decide(false, true, true, false), HookAction::Swallow);
+    }
+}
+
+// 紧急组合键的判定单测。
+// ⚠️ 只测纯函数：真正的触发路径（回调里那一段）不能测 —— 它会把本进程杀掉的。
+// 而且注入事件不参与判定（见 `emergency_bit` 上方的说明），自动化测试也造不出物理按键。
+#[cfg(test)]
+mod emergency_tests {
+    use super::*;
+
+    #[test]
+    fn emergency_bit_takes_left_variants_only() {
+        assert_eq!(emergency_bit(0x1D, false), Some(EMERG_BIT_LCTRL));
+        assert_eq!(emergency_bit(0x39, false), Some(EMERG_BIT_SPACE));
+        assert_eq!(emergency_bit(0x01, false), Some(EMERG_BIT_ESC));
+        // E0 变体不计入 —— 右 Ctrl 的 MakeCode 同样是 0x1D。
+        assert_eq!(emergency_bit(0x1D, true), None);
+        assert_eq!(emergency_bit(0x39, true), None);
+        assert_eq!(emergency_bit(0x01, true), None);
+    }
+
+    #[test]
+    fn emergency_bit_ignores_other_keys() {
+        // A / LShift / LAlt / LWin / NumLock … 都不是成员。
+        for sc in [0x1Eu16, 0x2A, 0x38, 0x5B, 0x45, 0x00] {
+            assert_eq!(emergency_bit(sc, false), None, "scan {:#04x} 不该计入", sc);
+        }
+    }
+
+    #[test]
+    fn emergency_triggers_only_when_all_three_are_held() {
+        let mut mask = emergency_after(0, EMERG_BIT_LCTRL, false);
+        assert_ne!(mask, EMERG_TRIGGER);
+        mask = emergency_after(mask, EMERG_BIT_SPACE, false);
+        assert_ne!(mask, EMERG_TRIGGER);
+        mask = emergency_after(mask, EMERG_BIT_ESC, false);
+        assert_eq!(mask, EMERG_TRIGGER, "三键同时按住必须触发");
+    }
+
+    #[test]
+    fn emergency_needs_simultaneous_hold() {
+        // 逐个按完就抬起（不重叠）永远不触发。
+        let mut mask = 0u8;
+        for bit in [EMERG_BIT_LCTRL, EMERG_BIT_SPACE] {
+            mask = emergency_after(mask, bit, false);
+            assert_ne!(mask, EMERG_TRIGGER);
+            mask = emergency_after(mask, bit, true);
+        }
+        mask = emergency_after(mask, EMERG_BIT_ESC, false);
+        assert_ne!(mask, EMERG_TRIGGER, "非重叠按下不该触发");
+    }
+
+    #[test]
+    fn emergency_release_clears_only_that_key() {
+        assert_eq!(
+            emergency_after(EMERG_TRIGGER, EMERG_BIT_LCTRL, true),
+            EMERG_BIT_SPACE | EMERG_BIT_ESC
+        );
+        assert_eq!(
+            emergency_after(EMERG_TRIGGER, EMERG_BIT_SPACE, true),
+            EMERG_BIT_LCTRL | EMERG_BIT_ESC
+        );
+        assert_eq!(
+            emergency_after(EMERG_TRIGGER, EMERG_BIT_ESC, true),
+            EMERG_BIT_LCTRL | EMERG_BIT_SPACE
+        );
     }
 }
