@@ -91,7 +91,7 @@ AnyKey/
 | 文件 | 职责 |
 |------|------|
 | `lib.rs` | crate 根，导出全部子模块 |
-| `main.rs` | 引擎可执行入口（`anykey-engine.exe <config.json> [--debug]`）；事件驱动主循环、键盘+鼠标、看门狗心跳 |
+| `main.rs` | 引擎可执行入口（`anykey-engine.exe <config.json> [--debug] [--backend=driver\|llhook]`）；事件驱动主循环、键盘+鼠标、后端构造与回退、钩子存活对账 |
 | `config.rs` | `Config` / `AppOverride` / `DeviceOverride` 结构 + serde 解析（combo / layers / tapDance / devices / subscribed_devices）；`AppOverride` 须带 `#[serde(rename_all = "camelCase")]`，否则 JSON `comboMap` 字段静默丢失 |
 | `state.rs` | `PipelineState` + 各状态结构；**`mapping: Arc<DeviceMapping>` + `state: DeviceState`** — 管道直接字段访问；`current_device` 为输出目标设备；`current_domain` 为域标识；timer 调度（TimerEntry 带 Arc 快照） |
 | `pipeline.rs` | **管道主干**：`key_down(key)`/`key_up(key)` 入口；`self.state`/`self.mapping` 直接字段访问；`key_down_inner`/`key_up_inner` 按序调度 Phase0-7 / Up1-8+UpLeader；定时器（reenter_up / fire_sleep_timer）；共享查询层（current_layer / is_switch_key 等） |
