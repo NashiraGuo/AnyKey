@@ -5,7 +5,7 @@
 // Run:   target/debug/examples/test_filter_driver.exe (as Administrator on the VM)
 //
 // The driver starts with interception OFF and stays off after this test exits
-// (FilterDriver::drop calls CloseHandle, the watchdog auto-disables).
+// (FilterDriver::drop calls CloseHandle -> EvtFileCleanup -> all devices back to passthrough).
 
 use anykey_engine::events::{AnyKeyOutputEvent, ANYKEY_KEY_BREAK};
 use anykey_engine::filter_driver::FilterDriver;
@@ -109,7 +109,7 @@ fn main() {
     if total == 0 {
         println!("WARN: No events captured. Check:");
         println!("  * Does the filter see CONNECT hooked in WinDbg?");
-        println!("  * Is interception actually ON? (service watchdog: any polling keeps it alive)");
+println!("  * Is interception actually ON? (check the driver debug output)");
         println!("  * Try pressing keys on a DIFFERENT keyboard (e.g., Basic vs Enhanced session).");
     }
 

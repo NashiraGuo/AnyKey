@@ -3,15 +3,14 @@
   Keyboard + Mouse class filter driver: intercept input, inject output.
   Installed as UpperFilter of keyboard and mouse classes.
   v0.3: emergency combo (LCtrl+Space+Esc) + fixed E0-prefixed modifier release.
+  v0.5: heartbeat watchdog removed (Session/Heartbeat safety model dropped).
 
   === SAFETY ===
   1. Emergency combo: LCtrl+Space+Esc -> immediate shutdown (releases all held
      modifiers/mouse buttons, disables interception, flushes queues).
-     Checked at highest priority BEFORE heartbeat watchdog.
-  2. Watchdog: if engine doesn't poll within 30s, interception auto-disables.
-  3. Safe Mode: UpperFilters are NOT loaded in Safe Mode.
-  4. Pass-through default: InterceptEnabled starts FALSE.
-  5. sc stop anykey_flt / sc delete anykey_flt removes the filter.
+  2. Safe Mode: UpperFilters are NOT loaded in Safe Mode.
+  3. Pass-through default: InterceptEnabled starts FALSE.
+  4. sc stop anykey_flt / sc delete anykey_flt removes the filter.
 --*/
 
 #include "anykey_flt.h"
@@ -27,13 +26,6 @@ typedef struct _ANYKEY_GLOBAL {
 
     // ─ Session + Health ─
     BOOLEAN             CaptureEnabled;     // Passive passthrough capture for GUI identify (mirrors input, no consume)
-    BOOLEAN             SessionActive;      // TRUE when engine has opened handle
-
-    // ── Heartbeat (Session+Heartbeat safety model) ──
-    // Updated on IOCTL_ANYKEY_HEARTBEAT by dedicated watchdog thread.
-    // Uses KeQueryInterruptTime (not system time) for monotonic comparison.
-    LARGE_INTEGER       LastHeartbeat;      // KeQueryInterruptTime at last heartbeat
-
     // Event-driven input notification (IOCTL_ANYKEY_SET_EVENT)
     // Shared by both KbFilter and MouFilter ServiceCallbacks.
     PKEVENT             hInputEvent;        // Valid KEVENT ptr after user-mode register
@@ -52,9 +44,6 @@ typedef struct _ANYKEY_GLOBAL {
     BOOLEAN             Emergency_Space;     // TRUE while Space is held
     BOOLEAN             Emergency_Esc;       // TRUE while Escape is held
 } ANYKEY_GLOBAL;
-
-// Safety timeout: if engine doesn't heartbeat for this many seconds, emergency shutdown
-#define ANYKEY_HEARTBEAT_TIMEOUT_SECONDS  30
 
 static ANYKEY_GLOBAL g_AnyKey = { 0 };
 
@@ -88,15 +77,13 @@ DriverEntry(
     WDF_DRIVER_CONFIG config;
     NTSTATUS status;
 
-    AnyKeyDebugPrint("AnyKey Filter Driver v0.2.0 (kb+mouse)\n");
+AnyKeyDebugPrint("AnyKey Filter Driver v0.5.0 (kb+mouse)\n");
 
     // Init global state
     KeInitializeSpinLock(&g_AnyKey.ListLock);
     InitializeListHead(&g_AnyKey.DeviceListHead);
     g_AnyKey.NextDeviceId = 1;
     g_AnyKey.CaptureEnabled = FALSE;
-    g_AnyKey.SessionActive = FALSE;
-    g_AnyKey.LastHeartbeat.QuadPart = 0;
 
     WDF_DRIVER_CONFIG_INIT(&config, AnyKey_EvtDeviceAdd);
 
@@ -229,7 +216,6 @@ AnyKey_EvtFileCleanup(
     }
     KeReleaseSpinLock(&g_AnyKey.ListLock, oldIrql);
 
-    g_AnyKey.SessionActive = FALSE;
     AnyKeyDebugPrint("FileCleanup: session closed, all devices set to passthrough\n");
 }
 
@@ -709,7 +695,7 @@ KbFilter_ServiceCallback(
     count = (ULONG)(InputDataEnd - InputDataStart);
 
     // ===========================================================
-    // EMERGENCY COMBO CHECK — highest priority, before heartbeat.
+// EMERGENCY COMBO CHECK — highest priority, before any other check.
     // Detect LCtrl(0x1D)+Space(0x39)+Esc(0x01) all held down.
     // Runs at DISPATCH_LEVEL; single BOOLEAN reads/writes are atomic.
     // Excludes E0-prefixed variants (RCtrl also=0x1D but with E0).
@@ -751,24 +737,6 @@ KbFilter_ServiceCallback(
                 *InputDataConsumed = count;
                 return;
             }
-        }
-    }
-
-    //
-    // Session+Heartbeat watchdog: if this device is being intercepted
-    // and engine has a session but hasn't sent a heartbeat → emergency shutdown.
-    // (Check any device's InterceptEnabled — if any is ON, engine should be alive.)
-    //
-    if (devExt->InterceptEnabled && g_AnyKey.SessionActive &&
-        g_AnyKey.LastHeartbeat.QuadPart != 0) {
-        LARGE_INTEGER now;
-        now.QuadPart = KeQueryInterruptTime();
-        LONGLONG elapsed = (now.QuadPart - g_AnyKey.LastHeartbeat.QuadPart);
-        // Convert 100ns units to seconds (1 second = 10,000,000 * 100ns)
-        elapsed /= 10000000LL;
-        if (elapsed > ANYKEY_HEARTBEAT_TIMEOUT_SECONDS) {
-            AnyKeyDebugPrint("HEARTBEAT: timeout (%lld sec) -> emergency shutdown\n", elapsed);
-            AnyKey_EmergencyShutdown();
         }
     }
 
@@ -875,21 +843,6 @@ MouFilter_ServiceCallback(
     hDevice = WdfWdmDeviceGetWdfDeviceHandle(DeviceObject);
     devExt = FilterGetData(hDevice);
     count = (ULONG)(InputDataEnd - InputDataStart);
-
-    //
-    // Session+Heartbeat watchdog (shared with keyboard -- same global state).
-    //
-    if (devExt->InterceptEnabled && g_AnyKey.SessionActive &&
-        g_AnyKey.LastHeartbeat.QuadPart != 0) {
-        LARGE_INTEGER now;
-        now.QuadPart = KeQueryInterruptTime();
-        LONGLONG elapsed = (now.QuadPart - g_AnyKey.LastHeartbeat.QuadPart);
-        elapsed /= 10000000LL;
-        if (elapsed > ANYKEY_HEARTBEAT_TIMEOUT_SECONDS) {
-            AnyKeyDebugPrint("MOUSE HEARTBEAT: timeout (%lld sec) -> emergency shutdown\n", elapsed);
-            AnyKey_EmergencyShutdown();
-        }
-    }
 
     //
     // per-device pass-through: forward to original mouclass callback
@@ -1256,7 +1209,7 @@ AnyKey_InjectMouseOutput(
 }
 
 // ===============================================================
-// AnyKey_EmergencyShutdown — heartbeat timeout recovery.
+// AnyKey_EmergencyShutdown — emergency stop (LCtrl+Space+Esc combo).
 // Disables interception, flushes all device queues, and
 // injects key-up events for common modifiers (Ctrl/Shift/Alt/Win)
 // so users aren't stuck with held keys after recovery.
@@ -1374,10 +1327,6 @@ AnyKey_EmergencyShutdown(VOID)
         }
         KeReleaseSpinLock(&g_AnyKey.ListLock, oldIrql);
     }
-
-    // 5. Reset session state
-    g_AnyKey.SessionActive = FALSE;
-    g_AnyKey.LastHeartbeat.QuadPart = 0;
 
     AnyKeyDebugPrint("EMERGENCY: intercept disabled, queues flushed, modifiers released\n");
 }
@@ -1611,12 +1560,6 @@ KbFilter_EvtIoDeviceControlFromRawPdo(
             }
             KeReleaseSpinLock(&g_AnyKey.ListLock, oldIrql);
 
-            if (req.Enable) {
-                // Session starts: reset heartbeat, mark session active
-                g_AnyKey.SessionActive = TRUE;
-                g_AnyKey.LastHeartbeat.QuadPart = KeQueryInterruptTime();
-            }
-
             AnyKeyDebugPrint("SET_INTERCEPT: dev=%lu %s (%lu devices)\n",
                              req.DeviceId,
                              req.Enable ? "INTERCEPT" : "PASSTHROUGH",
@@ -1708,68 +1651,6 @@ KbFilter_EvtIoDeviceControlFromRawPdo(
             }
 
             bytesReturned = 0;
-        }
-        break;
-
-    // ── IOCTL_ANYKEY_HEARTBEAT ──
-    case IOCTL_ANYKEY_HEARTBEAT:
-        {
-            g_AnyKey.SessionActive = TRUE;
-            g_AnyKey.LastHeartbeat.QuadPart = KeQueryInterruptTime();
-
-            // Optionally return driver status on heartbeat
-            PANYKEY_HEARTBEAT_RESPONSE resp;
-            size_t respSize = sizeof(ANYKEY_HEARTBEAT_RESPONSE);
-            if (OutputBufferLength >= respSize) {
-                status = WdfRequestRetrieveOutputBuffer(Request, respSize,
-                                                        &outBuf, NULL);
-                if (NT_SUCCESS(status)) {
-                    resp = (PANYKEY_HEARTBEAT_RESPONSE)outBuf;
-                    RtlZeroMemory(resp, respSize);
-                    resp->DriverVersion = ANYKEY_DRIVER_VERSION;
-                    resp->Timestamp     = g_AnyKey.LastHeartbeat;
-
-                    // Count queued events across all devices
-                    ULONG totalQueued = 0;
-                    ULONG deviceCount = 0;
-                    KIRQL qlIrql;
-                    KeAcquireSpinLock(&g_AnyKey.ListLock, &qlIrql);
-                    PLIST_ENTRY e;
-                    for (e = g_AnyKey.DeviceListHead.Flink;
-                         e != &g_AnyKey.DeviceListHead;
-                         e = e->Flink) {
-                        PDEVICE_EXTENSION dExt = CONTAINING_RECORD(e, DEVICE_EXTENSION, ListEntry);
-                        totalQueued += dExt->InputQueueCount;
-                        totalQueued += dExt->MouseQueueCount;
-                        deviceCount++;
-                    }
-                    KeReleaseSpinLock(&g_AnyKey.ListLock, qlIrql);
-
-                    resp->QueueDepth  = totalQueued;
-                    resp->DeviceCount = deviceCount;
-                    // v0.4: per-device — state_flags based on is any device intercepting
-                    {
-                        BOOLEAN anyIntercepting = FALSE;
-                        for (e = g_AnyKey.DeviceListHead.Flink;
-                             e != &g_AnyKey.DeviceListHead;
-                             e = e->Flink) {
-                            PDEVICE_EXTENSION dExt =
-                                CONTAINING_RECORD(e, DEVICE_EXTENSION, ListEntry);
-                            if (dExt->InterceptEnabled) {
-                                anyIntercepting = TRUE;
-                                break;
-                            }
-                        }
-                        resp->StateFlags = anyIntercepting
-                                         ? ANYKEY_STATE_INTERCEPTING
-                                         : ANYKEY_STATE_HEALTHY;
-                    }
-                    bytesReturned = respSize;
-                }
-            } else {
-                bytesReturned = 0;
-            }
-            status = STATUS_SUCCESS;
         }
         break;
 

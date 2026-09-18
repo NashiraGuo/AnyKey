@@ -78,8 +78,6 @@ const IOCTL_ANYKEY_SET_INTERCEPT: u32 =
     ctl_code(FILE_DEVICE_KEYBOARD, ANYKEY_IOCTL_INDEX + 4, METHOD_BUFFERED, FILE_WRITE_DATA);
 const IOCTL_ANYKEY_SET_EVENT: u32 =
     ctl_code(FILE_DEVICE_KEYBOARD, ANYKEY_IOCTL_INDEX + 5, METHOD_BUFFERED, FILE_WRITE_DATA);
-const IOCTL_ANYKEY_HEARTBEAT: u32 =
-    ctl_code(FILE_DEVICE_KEYBOARD, ANYKEY_IOCTL_INDEX + 6, METHOD_BUFFERED, FILE_READ_DATA);
 const IOCTL_ANYKEY_ENUM_DEVICES: u32 =
     ctl_code(FILE_DEVICE_KEYBOARD, ANYKEY_IOCTL_INDEX + 7, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA);
 const IOCTL_ANYKEY_GET_STATUS: u32 =
@@ -92,20 +90,6 @@ const IOCTL_ANYKEY_SEND_MOUSE_OUTPUT: u32 =
     ctl_code(FILE_DEVICE_KEYBOARD, ANYKEY_IOCTL_INDEX + 10, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA);
 const IOCTL_ANYKEY_SET_MOUSE_MOVE: u32 =
     ctl_code(FILE_DEVICE_KEYBOARD, ANYKEY_IOCTL_INDEX + 11, METHOD_BUFFERED, FILE_WRITE_DATA);
-
-// ── Heartbeat response struct (matches public.h) ──
-#[repr(C)]
-pub struct AnyKeyHeartbeatResponse {
-    pub driver_version: u32,
-    pub queue_depth: u32,
-    pub device_count: u32,
-    pub timestamp: i64,     // LARGE_INTEGER
-    pub state_flags: u32,
-}
-
-pub const ANYKEY_STATE_HEALTHY: u32 = 0x00;
-pub const ANYKEY_STATE_INTERCEPTING: u32 = 0x01;
-pub const ANYKEY_STATE_EMERGENCY: u32 = 0x02;
 
 /// Intercept request (v0.4: per-device, matches ANYKEY_INTERCEPT_REQUEST in public.h).
 #[repr(C)]
@@ -192,31 +176,6 @@ impl FilterDriver {
             return Err(format!("SET_INTERCEPT(dev={}, enable={}) failed: {}", device_id, enable, unsafe { GetLastError() }));
         }
         Ok(())
-    }
-
-    /// Send heartbeat to driver. Called by watchdog thread every ~5s.
-    /// Returns driver status info on success.
-    pub fn heartbeat(&self) -> Result<AnyKeyHeartbeatResponse, String> {
-        let mut resp: AnyKeyHeartbeatResponse = unsafe { std::mem::zeroed() };
-        let mut bytes_returned: u32 = 0;
-
-        let ok = unsafe {
-            DeviceIoControl(
-                self.handle,
-                IOCTL_ANYKEY_HEARTBEAT,
-                std::ptr::null(),
-                0,
-                &mut resp as *mut _ as *mut std::ffi::c_void,
-                mem::size_of::<AnyKeyHeartbeatResponse>() as u32,
-                &mut bytes_returned,
-                std::ptr::null_mut(),
-            )
-        };
-
-        if ok == 0 {
-            return Err(format!("HEARTBEAT failed: {}", unsafe { GetLastError() }));
-        }
-        Ok(resp)
     }
 
     /// Poll for available input events (non-blocking).

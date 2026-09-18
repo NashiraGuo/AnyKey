@@ -66,12 +66,6 @@ DEFINE_GUID(GUID_DEVINTERFACE_ANYKEY_FLT,
                                                METHOD_BUFFERED,         \
                                                FILE_WRITE_DATA)
 
-// IOCTL_ANYKEY_HEARTBEAT -- Health check from engine watchdog thread.
-#define IOCTL_ANYKEY_HEARTBEAT        CTL_CODE(FILE_DEVICE_KEYBOARD,  \
-                                               ANYKEY_IOCTL_INDEX + 6, \
-                                               METHOD_BUFFERED,         \
-                                               FILE_READ_DATA)
-
 // IOCTL_ANYKEY_ENUM_DEVICES -- Enumerate all filter devices.
 // Input: ANYKEY_ENUM_DEVICES_REQUEST
 // Output: ANYKEY_DEVICE_INFO[] (up to MaxCount, starting from Index)
@@ -223,18 +217,6 @@ typedef struct _ANYKEY_DRIVER_STATUS {
     ULONG   InterceptingCount;  // how many devices currently have InterceptEnabled=TRUE
 } ANYKEY_DRIVER_STATUS, *PANYKEY_DRIVER_STATUS;
 
-// -- Heartbeat response (IOCTL_ANYKEY_HEARTBEAT output) --
-#define ANYKEY_DRIVER_VERSION  0x00040000  // major.minor (v0.4: per-device intercept)
-typedef struct _ANYKEY_HEARTBEAT_RESPONSE {
-    ULONG           DriverVersion;      // ANYKEY_DRIVER_VERSION
-    ULONG           QueueDepth;         // Total queued events across all devices
-    ULONG           DeviceCount;        // Number of filter devices
-    LARGE_INTEGER   Timestamp;          // KeQueryInterruptTime at last heartbeat
-    ULONG           StateFlags;         // 0=healthy, see ANYKEY_STATE_*
-} ANYKEY_HEARTBEAT_RESPONSE, *PANYKEY_HEARTBEAT_RESPONSE;
-
-#define ANYKEY_STATE_HEALTHY       0x00
-#define ANYKEY_STATE_INTERCEPTING  0x01
-#define ANYKEY_STATE_EMERGENCY     0x02
-
+// -- Driver version (must match DriverVer in both INFs) --
+#define ANYKEY_DRIVER_VERSION  0x00050000  // major.minor (v0.5: heartbeat watchdog removed)
 #endif // _ANKEY_FLT_PUBLIC_H

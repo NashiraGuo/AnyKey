@@ -14,7 +14,7 @@ ClassGuid   = {4D36E96B-E325-11CE-BFC1-08002BE10318}
 Provider    = %AnyKey%
 ; DriverVer must match ANYKEY_DRIVER_VERSION in sys/public.h (0x000N0000 == v0.N).
 ; Both INFs describe the SAME anykey_flt.sys, so they must carry an identical value.
-DriverVer   = 09/10/2026,0.4.0.0
+DriverVer   = 09/18/2026,0.5.0.0
 ; CatalogFile omitted - test signing mode doesn't require a catalog
 
 [Manufacturer]

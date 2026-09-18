@@ -360,8 +360,8 @@ fn main() {
             match HookInput::install() {
                 Ok(h) => {
                     log!("llhook: SetWindowsHookExW(WH_KEYBOARD_LL + WH_MOUSE_LL) -> OK");
-                    log!("llhook: message pump thread started (heartbeat/watchdog n/a; \
-                          main loop 用钩子存活对账替代)");
+                    log!("llhook: message pump thread started (no driver heartbeat/watchdog — \
+                          liveness is judged by the main loop via hook callbacks)");
                     Backend::LlHook(h)
                 }
                 Err(e) => {
@@ -496,37 +496,6 @@ fn main() {
     // 全部枚举设备 id（prebuild 用）
     let all_device_ids: Vec<u32> = descriptors.iter().map(|d| d.runtime_device_id).collect();
     log!("Default devices: keyboard={}, mouse={}", default_kbd, default_ms);
-
-    // ── Heartbeat watchdog thread ──
-    // Opens a separate handle to \\.\AnyKeyFlt and sends heartbeat IOCTL
-    // every 5s. This lives in its own thread so an input-thread hang doesn't
-    // kill the heartbeat. If the driver misses 30s of heartbeats, it performs
-    // emergency shutdown (flush queues, release modifiers, disable intercept).
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-    let heartbeat_running = Arc::new(AtomicBool::new(true));
-    // 心跳 IOCTL 是驱动专属；llhook 模式下没有驱动可打，存活检查由 main loop 的
-    // 钩子存活对账承担（见下方 liveness）。此处若强行启动只会每 5s 打一行错误。
-    if planned == BackendKind::Driver {
-        let running = heartbeat_running.clone();
-        std::thread::spawn(move || {
-            // Open separate handle for heartbeat — isolated from input thread
-            let hb_fd = match FilterDriver::open() {
-                Ok(f) => f,
-                Err(e) => { log!("  HEARTBEAT: {}", e); return; }
-            };
-
-            while running.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                if !running.load(Ordering::Relaxed) { break; }
-
-                match hb_fd.heartbeat() {
-                    Ok(_) => { /* healthy */ }
-                    Err(e) => log!("  HEARTBEAT: {}", e),
-                }
-            }
-        });
-    }
-
     let dev_count = backend.device_count().unwrap_or(0);
     log!("Devices: {}", dev_count);
 
