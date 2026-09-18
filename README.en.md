@@ -47,7 +47,7 @@ The release package ships both — **whether to install the driver is your call*
 | Works inside elevated (UAC) windows | ✅ | ❌ (only if you start AnyKey as administrator) |
 | Coexists with other hook-based tools (AutoHotkey / espanso) | ✅ | ❌ they interfere with each other |
 | Software that rejects injected input (some anti-cheat, security controls) | ✅ driver injection is indistinguishable from physical keys | ⚠️ every keystroke is an injected event — may be ignored |
-| Kernel-level emergency escape hotkey (LCtrl+Space+Esc) | ✅ | ❌ see [4.1](#41-fail-safe-protection) |
+| Emergency escape hotkey (LCtrl+Space+Esc) | ✅ kernel-level | ✅ hook-level (see below) |
 | Input latency | lower | one extra user-mode round trip per key |
 
 **How to choose**: the "Run mode" switch in the GUI's left column. **If the driver is unavailable, the switch is greyed out and states the reason** (not installed / installed but not loaded / test signing off), and the engine simply runs in portable mode. The choice is stored in the top-level `backend` field of the config (`driver` / `llhook`) and **takes effect after the engine restarts** (tray "Reload settings", or "Full exit" and start again). To force it, pass `--backend=llhook` on the engine command line.
@@ -57,7 +57,8 @@ The release package ships both — **whether to install the driver is your call*
 1. It turns **the whole keyboard** into "swallow and replay" — every keystroke is intercepted first and then sent back to the system as an injected event. So any software that **rejects injected input** (some game anti-cheat, banking security controls, hardened password fields) may never see your keys;
 2. It **cannot coexist with other LL hook tools** (AutoHotkey, espanso, hook features built into IMEs): whichever hook is installed last wins, showing up as dead hotkeys or double triggers.
 
-Portable mode also **lacks the last two of the three defenses described in 4.1** (the emergency escape hotkey and the 30s watchdog are both built into the driver). Its safety comes from three other things instead: the hook is removed automatically when the process exits (so no stuck keyboard is left behind), hook callbacks never block (when the queue is full the original key passes through), and the main loop cross-checks hook liveness and logs a warning.
+Portable mode **has the emergency escape hotkey**: the same **hold LCtrl+Space+Esc**, except it lives in the hook layer rather than in the kernel — pressing it terminates the engine process at once, the hooks go away with it, and keyboard/mouse return to native behaviour immediately. That makes it effective in both "keyboard stops responding" scenarios: a deadlocked main thread (callbacks are still invoked) and a bad config that swallows keys. The only thing it **lacks** is the 30s heartbeat watchdog (the driver's automatic recovery).
+Two further safety properties: hook callbacks never block (when the queue is full the original key passes through), and the main loop cross-checks hook liveness and logs a warning.
 
 ---
 
@@ -144,7 +145,7 @@ Three installation steps:
 
 ### 4.1 Fail-safe Protection
 
-**Emergency escape hotkey (LCtrl + Space + Esc)**: hold all three keys **simultaneously** to trigger an immediate emergency stop — interception off, input queues flushed, all held modifiers released, state reset. Only the **left Ctrl** counts (E0-prefixed right Ctrl is ignored) to prevent accidental triggers. Because it lives in the driver's `ServiceCallback` (DISPATCH_LEVEL, in the path of every keystroke), it works even when the engine's main thread is deadlocked and user-mode code cannot run.
+**Emergency escape hotkey (LCtrl + Space + Esc)**: hold all three keys **simultaneously** to trigger an immediate emergency stop — interception off, input queues flushed, all held modifiers released, state reset. Only the **left Ctrl** counts (E0-prefixed right Ctrl is ignored) to prevent accidental triggers. Because it lives in the driver's `ServiceCallback` (DISPATCH_LEVEL, in the path of every keystroke), it works even when the engine's main thread is deadlocked and user-mode code cannot run. **In portable mode the same semantics are implemented in the engine's hook callback** (hold all three → the engine process terminates at once, its hooks disappear, input returns to native behaviour), again looking only at physical keys and only at the left Ctrl.
 
 AnyKey is an "input gateway" — if the engine/driver hangs, the whole keyboard locks up. That's why three defenses with **mutually independent detection signals** are built in:
 
@@ -154,7 +155,7 @@ AnyKey is an "input gateway" — if the engine/driver hangs, the whole keyboard 
 | Heartbeat | Engine heartbeat thread stalls (deadlock) | 30s without heartbeat IOCTL → emergency stop | `anykey_flt.c` + `main.rs` heartbeat thread (every 5s) |
 | **Emergency escape hotkey** | Main thread deadlocked but heartbeat still alive (no automatic layer fires) | Hardware-level combo, bypasses the engine entirely | Built into the filter driver |
 
-> **In portable mode**: the last two layers above are built into the driver and unavailable. See the end of [Two Run Modes](#two-run-modes) for what stands in their place.
+> **In portable mode**: the emergency escape hotkey is still available, but implemented in the hook layer — the same LCtrl+Space+Esc, which terminates the engine process so its hooks disappear and input is restored at once. The 30s heartbeat watchdog has no counterpart. See the end of [Two Run Modes](#two-run-modes).
 
 ### 4.2 System Tray
 
@@ -399,7 +400,7 @@ AnyKey/
 │   ├── src/               Pipeline phases 0-7 / Up1-8, Combo/TD/Layer/Leader/Defer
 │   │                      backend.rs (backend seam: driver / portable) · hook_input.rs + sendinput_out.rs (portable backend)
 │   │                      events.rs (shared event definitions) · filter_driver.rs (driver protocol)
-│   └── tests/             Integration tests (131 unit + scenario tests)
+│   └── tests/             Integration tests (136 unit + scenario tests)
 ├── anykey-tray/           Rust system tray (engine lifecycle / IPC / autostart)
 ├── anykey-filter-driver/  C kernel filter driver (WDK)
 │   ├── sys/               Driver source (anykey_flt.c / rawpdo.c / public.h)
@@ -495,7 +496,7 @@ python -m gui.main             # launch the configurator
 
 ## 8. Testing
 
-- Rust engine: `cargo test` (131 unit + scenario tests, including integration tests in `tests/`)
+- Rust engine: `cargo test` (136 unit + scenario tests, including integration tests in `tests/`)
 - Python: config parsing tests under `tests/`
 
 ---
