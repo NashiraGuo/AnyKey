@@ -696,7 +696,7 @@ fn main() {
     if debug_enabled {
         log!("[device] recent_kb_dev={} recent_mouse_dev={}", recent_kb_dev, recent_mouse_dev);
     }
-    // ── 后端存活对账状态（仅免驱动后端用；驱动后端由心跳线程 + 驱动看门狗负责）──
+    // ── 后端存活对账状态（仅免驱动后端用；驱动后端无对应物 —— v0.5 起心跳与看门狗已删）──
     // 复用 main loop 自身的节拍（`timeout` 上限 1000ms），不新开线程。
     let mut last_liveness_check = std::time::Instant::now();
     let mut liveness_healthy: Option<bool> = None;

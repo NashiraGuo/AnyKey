@@ -5,7 +5,7 @@
 // over a device interface (GUID_DEVINTERFACE_ANYKEY_FLT).
 //
 // Enabled via: #[cfg(feature = "filter-driver")]
-// 本文件 = 驱动后端 + 驱动协议（IOCTL 码、控制设备句柄、心跳/拦截/状态/枚举请求）。
+// 本文件 = 驱动后端 + 驱动协议（IOCTL 码、控制设备句柄、拦截/状态/枚举请求）。
 // 两个后端共用的**事件负载与常量在 events.rs** —— 那些东西免驱动后端也有对应物。
 // 判据：某个类型在免驱动后端下有没有对应物？有 → events.rs；没有 → 留这里。
 //

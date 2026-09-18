@@ -168,7 +168,7 @@ impl Backend {
         }
     }
 
-    /// 存活对账。驱动后端由心跳线程 + 驱动看门狗负责 → `None`；
+    /// 存活对账。驱动后端没有对应物（v0.5 起心跳与看门狗已整体删除）→ `None`；
     /// 免驱动后端返回钩子对账结果（系统侧有输入而钩子长时间静默 = 疑似失活）。
     pub fn liveness(&self) -> Option<HookLiveness> {
         match self {
