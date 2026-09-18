@@ -236,7 +236,7 @@ impl Backend {
 | **新增 `src/hook_input.rs`** | **`WH_KEYBOARD_LL` + `WH_MOUSE_LL` 两个钩子同线程安装**（§3.6 实测可共存）+ **专用线程消息泵**（`MsgWaitForMultipleObjectsEx` 模式，同 `app_sensor.rs:64/73-116`）；回调内：`code < 0` 或 `LLKHF_INJECTED`/`LLMHF_INJECTED` → 透传，否则按 §3.1 造事件推入**有界通道**（`try_send` 失败 → 直通降级 + 告警，**绝不在回调里等待**）；鼠标**移动**不进管道（与驱动「纯移动直接转发」一致）；投影逻辑写成纯函数便于单测 |
 | ✅ `src/hook_input.rs`（Step 6 补充） | **三个开关 + 一个纯判定**：`capture`（镜像入队）/ `swallow`（吞原事件）/ `accept_injected`（收下注入事件），由 `decide() -> {Pass, Mirror, Swallow}` 合成唯一判定；`HookOptions::production()` 与 `::for_test()` 是仅有的两种合法组合。原先「入队」与「吞键」焊在一起（A2），于是**无法只观察不吞** —— 而这正是自动化测试需要的能力。驱动后端一直有这个二分（`InterceptEnabled` / `CaptureEnabled`），所以这里是让两个后端对称，而不是为测试开特例。另加**紧急退出组合键**（LCtrl+Space+Esc，回调内先于一切判定的纯函数位运算）—— 动机、语义与实现见 §10 |
 | **新增 `src/sendinput_out.rs`** | 鼠标按键 / 滚轮 / 移动的 SendInput 实现；键盘直接转调 `emit.rs:101/120`；文本复用 `main.rs:736 send_unicode_text` |
-| `src/main.rs` | ① 参数解析改全 argv 扫描；② 启动按 §4.2 构造后端，把现有 ~10 处 `fd.*` 调用（`:229/238/244/255/330-339/587/602/732/854/917-923`）收敛到后端句柄之后；③ 输出出口分派（driver → IOCTL / llhook → SendInput）；④ 心跳线程（`:364`）在 llhook 模式下换成"钩子存活对账"（`GetLastInputInfo()` 与会话最后回调时间戳比对，前者推进而后者不动 = 钩子已被摘 → 记日志告警）；⑤ 日志改追加（§6） |
+| `src/main.rs` | ① 参数解析改全 argv 扫描；② 启动按 §4.2 构造后端，把现有 ~10 处 `fd.*` 调用（`:229/238/244/255/330-339/587/602/732/854/917-923`）收敛到后端句柄之后；③ 输出出口分派（driver → IOCTL / llhook → SendInput）；④ 心跳线程（`:364`；**v0.5 心跳与看门狗已整体删除**，见 §10）在 llhook 模式下换成"钩子存活对账"（`GetLastInputInfo()` 与会话最后回调时间戳比对，前者推进而后者不动 = 钩子已被摘 → 记日志告警）；⑤ 日志改追加（§6） |
 | ✅ **新增 `src/events.rs`** | 两个后端共用的 I/O 词汇，**无 cfg** —— 详见 §5.4（Step 5） |
 | ✅ `src/registry.rs` | `scan_all` / `init` / `refresh` 已收 `&Backend`（Step 1）；本步把设备清单负载（`AnyKeyDeviceInfo` / `AnyKeyEnumDevicesRequest`）的 import 改指 `events`。llhook 侧返回单设备桩（device 0，同时标记键盘+鼠标） |
 | ✅ `src/emit.rs` | `MOUSE_*` 的 import 改指 `events`（Step 5） |
@@ -309,7 +309,7 @@ impl Backend {
 | 参数解释 | `backend requested = driver (来源: argv / 缺省)` |
 | driver 路径 | `CreateFile \\.\AnyKeyFilter` 的结果、失败时的 **Win32 错误码**（2=找不到设备、5=拒绝访问）、重试次数与结果、`set_device_intercept(true)` 返回值 |
 | 回退 | `WARN fallback -> llhook (driver unavailable, last err=<code>)` —— **生效值由此行体现** |
-| llhook 路径 | `SetWindowsHookExW(WH_KEYBOARD_LL + WH_MOUSE_LL) -> OK`；失败则带 `GetLastError`；`message pump thread started`；**`first hook callback received (kb_callbacks=N mouse_edges=M, Xms after install)`**（"装上"不等于"收得到"）；后续心跳 `llhook: liveness …`，异常时 `WARN … 钩子已 Nms 无回调`、恢复时 `hook callbacks resumed` |
+| llhook 路径 | `SetWindowsHookExW(WH_KEYBOARD_LL + WH_MOUSE_LL) -> OK`；失败则带 `GetLastError`；`message pump thread started`；**`first hook callback received (kb_callbacks=N mouse_edges=M, Xms after install)`**（"装上"不等于"收得到"）；后续存活对账 `llhook: liveness …`，异常时 `WARN … 钩子已 Nms 无回调`、恢复时 `hook callbacks resumed` |
 | 退出 | `exit_reason = <原因>`（非零退出码时附 `exit code = N`）+ 收尾横幅。可取的值：`config_read_failed` / `config_invalid` / `no_backend_available (exit code = 1)` / `poll_all_failed: …`。两处都失败时两个原因各写一行 |
 
 ### 6.3 怎么读
@@ -458,7 +458,7 @@ impl Backend {
 | 新增 `anykey-engine/src/hook_input.rs`（428 行） | 钩子安装 + 专用线程消息泵 + 有界通道 + 1:1 投影 + 存活对账 |
 | 新增 `anykey-engine/src/sendinput_out.rs`（185 行） | 鼠标按键 / 滚轮 / 移动的 SendInput 实现（键盘复用 `emit.rs`） |
 | `backend.rs` | 加 `LlHook(HookInput)` 变体；单设备桩 `enum_devices`；纯函数 `choose_backend` / `parse_backend_kind` |
-| `main.rs` | `--backend=` 全 argv 扫描；§4.2 构造顺序（含驱动 open 重试与**引擎内回退**）；llhook 下强制 `perDevice=false`；心跳线程仅驱动；主循环存活对账；两处都失败退出码 1 |
+| `main.rs` | `--backend=` 全 argv 扫描；§4.2 构造顺序（含驱动 open 重试与**引擎内回退**）；llhook 下强制 `perDevice=false`；心跳线程仅驱动（**v0.5 已删**）；主循环存活对账；两处都失败退出码 1 |
 | `Cargo.toml` | 加 `Win32_System_SystemInformation` feature（`GetTickCount`） |
 | `lib.rs` | 声明两个新模块 |
 
@@ -839,7 +839,7 @@ Step 6（打包便携 ZIP + README 能力对照表）。
 **起因**：用户问「llhook 没有紧急退出键，会不会因为错误配置之类的原因锁死键盘鼠标？」。核实结论是**会，而且它比驱动后端更需要兜底**：
 
 - llhook 是"吞掉再重放"：物理键判定 `Swallow` → `try_send` 成功即 `return 1`；鼠标**纯移动放行**、**按键/滚轮同样被吞**；通道 `CHANNEL_CAP = 512`，**填满才降级直通**。
-- **引擎主线程卡死** → 前 512 个键鼠事件被吞且永不输出（键盘丢键、鼠标点不动但光标能动），之后才直通恢复（映射已失效）。而 llhook **没有任何自动恢复**：心跳线程不启动（`:500-528` 只在 driver 后端 spawn）、存活对账只告警不重装、也没有内核侧紧急键。
+- **引擎主线程卡死** → 前 512 个键鼠事件被吞且永不输出（键盘丢键、鼠标点不动但光标能动），之后才直通恢复（映射已失效）。而 llhook **没有任何自动恢复**：存活对账只告警不重装、也没有内核侧紧急键（v0.5 起驱动侧的心跳 watchdog 也已删除，两边一致）。
 - **配置错误**（引擎一切正常，但输出为空或写了非法键名被静默丢弃）→ 相关键永久消失。
 
 **做了什么**（`hook_input.rs`）
