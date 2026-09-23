@@ -882,6 +882,25 @@ Step 6（打包便携 ZIP + README 能力对照表）。
 1. ✅ **断言先后拦下两次错误定位**：① `g_AnyKey.SessionActive = FALSE;` 后跟 `LastHeartbeat.QuadPart = 0;` 在 **DriverEntry 初始化**与 **EmergencyShutdown 末尾**各有一处（两处形式完全相同！）→ 只能先删 EmergencyShutdown 那处（靠 `// 5. Reset session state` 注释定位）再删 DriverEntry 那处；② `if planned == BackendKind::Driver {` 在 main.rs 里也有两处 → 改成"心跳块起始之后第一次出现"。**零副作用**（写盘统一在末尾）。
 2. ⚠️ **跨行字符串替换必须连结束符一起换**：把 llhook 启动日志（`log!("…\` + 续行 `…");`）换成两行时**漏写了 `");`**，导致从该处起整个 `main.rs` 的引号配对错位 → **51 个语法错误**，且报错行散落在 765/944/971 等毫不相关的位置（`unterminated character literal`、`character literal may only contain one codepoint`），极具误导性。教训：**改跨行字符串后先单独 `cargo check` 拿到第一现场，别等全量测试**；判断依据是"错误数量远超改动量"就应怀疑字符串没闭合。
 
+
+### 2026-09-23 补 —— NumLock E0-45 变体识别（提交 `b1ef6e6`，主力机实测发现）
+
+**现象**：便携模式实机测试「NumLock 有时候出问题」。`--debug` 日志实锤：这台主力机的键盘把
+NumLock 物理发成 **E0-45**（扫描码 0x45 + E0 前缀变体），`input_name(0x45, E0)` 无条目 → 裸名
+`e0-45` → 发送层 `UNKNOWN KEY` → **DN/UP 全零注入，整键被吞**（LED 不动、小键盘行为不变）。
+此前推测的「注入切换但 LED 不刷」不成立——切换从未发生。
+
+**修复**：`input_name()` 的 e0 match 加 `0x45 => "numlock"`（归一化；输出仍走裸 0x45 标准形态，
+`needs_e0` 不变）+ 回归测试 `numlock_e045_variant_recognized`（裸 45 / E0-45 / 名字回查 / E1 仍 pause）。
+
+**验证**：`cargo test` **137 项全绿、零警告**（136 + 1）。
+
+**遗留观察**：用户报告「切换之后小键盘会成功改为 end/down/pgdn，原因暂不明」——待后续实测再查。
+「有时候出问题」的旧印象疑似来自两条物理路径（某处发 E0-45、另一处发裸 0x45），未证实。
+
+**顺带发现（未修）**：日志 tag `send(FLT)` 在 llhook 模式下同样打印（Backend 抽象后 tag 没跟后端
+走），诊断日志时会误导后端判断，列为待办。
+
 ---
 
 
