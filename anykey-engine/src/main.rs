@@ -557,7 +557,7 @@ fn main() {
                 fn send_key_event(backend: &Backend, kn_lower: &str, target_dev: u32, is_down: bool, is_tap: bool) {
                     if let Some(sc) = key_name_to_scancode(kn_lower) {
                         let kind = if is_tap { "TAP" } else if is_down { "DN" } else { "UP" };
-                        log!("  {} send(FLT): {} {} dev={}", ts_tag(), kind, kn_lower, target_dev);
+                        log!("  {} send: {} {} dev={}", ts_tag(), kind, kn_lower, target_dev);
                         let ext = needs_e0(kn_lower);
                         let mut flags: u16 = 0;
                         if ext { flags |= 0x02; }
@@ -576,7 +576,7 @@ fn main() {
                 fn send_mouse_event(backend: &Backend, name: &str, target_dev: u32, is_down: bool) {
                     use anykey_engine::emit::mouse_name_to_flags;
                     if let Some((mflags, is_wheel)) = mouse_name_to_flags(name, is_down) {
-                        log!("  {} send(FLT): MOUSE {} {} dev={}", ts_tag(), if is_down { "DN" } else { "UP" }, name, target_dev);
+                        log!("  {} send: MOUSE {} {} dev={}", ts_tag(), if is_down { "DN" } else { "UP" }, name, target_dev);
                         let mut mevt = AnyKeyMouseOutputEvent {
                             device_id: target_dev, flags: 0,
                             button_flags: mflags, button_data: 0,
@@ -620,7 +620,7 @@ fn main() {
                         let kn_lower = kn_clean.to_lowercase();
                         if let Some(sc) = key_name_to_scancode(&kn_lower) {
                             let ext = needs_e0(&kn_lower);
-                            log!("  {} send(SI): {} {} (sc=0x{:02X})", ts_tag(), if is_tap{"TAP"}else if is_down{"DN"}else{"UP"}, kn_lower, sc);
+                            log!("  {} send(ForceSI): {} {} (sc=0x{:02X})", ts_tag(), if is_tap{"TAP"}else if is_down{"DN"}else{"UP"}, kn_lower, sc);
                             let sent = send_key_down_sendinput(sc, ext);
                             if sent == 0 {
                                 log!("  {} WARNING: SendInput DN '{}' blocked/failed (returned 0, UIPI or security software)", ts_tag(), kn_lower);
@@ -647,7 +647,7 @@ fn main() {
                     EmitEvent::LayerOff(ref l, _) => { log!("  layer OFF: {}", l); }
                     EmitEvent::MouseMove(x, y, ev_dev) => {
                         let target_dev = mouse_target_dev(registry, ev_dev, recent_mouse_dev);
-                        log!("  {} send(FLT): MouseMove({}, {}) dev={}", ts_tag(), x, y, target_dev);
+                        log!("  {} send: MouseMove({}, {}) dev={}", ts_tag(), x, y, target_dev);
                         let mevt = AnyKeyMouseOutputEvent {
                             device_id: target_dev, flags: 0,
                             button_flags: 0, button_data: 0,
