@@ -119,6 +119,9 @@ fn input_name(code: u16, state: u16) -> String {
             0x4F => "end",          0x50 => "down",
             0x51 => "pgdn",         0x52 => "insert",
             0x53 => "delete",       0x5B => "lwin",
+            // E0-45：部分 USB/笔记本键盘的 NumLock 物理发这个变体。不命名会得到
+            // 裸名 e0-45，镜像时 UNKNOWN KEY 零注入，整键被吞（2026-09-23 实测）。
+            0x45 => "numlock",
             0x5C => "rwin",         0x5D => "apps",
             _ => return format!("e0-{:02x}", code),
         }.into();
@@ -1195,5 +1198,21 @@ mod run_shell_tests {
         assert!(needs_e0("pageup"), "pageup needs E0");
         assert!(needs_e0("pgdn"));
         assert!(needs_e0("pgup"));
+    }
+
+    // ── 回归：E0-45（部分键盘的 NumLock 变体）必须命名为 numlock ──
+    // 修复前 input_name(0x45, E0) 返回裸名 e0-45，发送层解析失败 → UNKNOWN KEY → 零注入。
+    #[test]
+    fn numlock_e045_variant_recognized() {
+        use anykey_engine::events::{ANYKEY_KEY_E0, ANYKEY_KEY_E1};
+        use super::input_name;
+        // 裸 0x45 = numlock（桌面标准形态，现状不变）
+        assert_eq!(input_name(0x45, 0), "numlock");
+        // E0-45 变体归一化为 numlock
+        assert_eq!(input_name(0x45, ANYKEY_KEY_E0), "numlock");
+        // 命名后发送层必须能解析回 0x45，否则镜像照样 UNKNOWN KEY
+        assert_eq!(key_name_to_scancode("numlock"), Some(0x45));
+        // E1 0x45 仍是 pause（llhook 侧由 vkCode=VK_PAUSE 在 project() 处区分）
+        assert_eq!(input_name(0x45, ANYKEY_KEY_E1), "pause");
     }
 }
