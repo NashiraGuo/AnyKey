@@ -38,6 +38,12 @@ Start-Transcript -Path $logFile -Force | Out-Null
 try {
     Write-Host "Running as SYSTEM. scriptDir=$scriptDir"
 
+    # 0. Remove the one-shot boot guard task FIRST. A stale guard firing after
+    #    this uninstall would try to "roll back" a machine that is already clean
+    #    (and could reboot it for nothing).
+    Unregister-ScheduledTask -TaskName 'AnyKeyBootGuard' -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Host "Boot guard task removed (if present)"
+
     # 1. Remove UpperFilters from all keyboard AND mouse devices
     $cleaned = 0
     $deviceClasses = @('Keyboard', 'Mouse')

@@ -36,7 +36,9 @@ DRIVER_FILES = [
     "anykey_flt.cer",
     "Install_AnyKey_Filter.bat",
     "Uninstall_AnyKey_Filter.bat",
+    "_check_test_signing.ps1",
     "_install_anykey_device.ps1",
+    "_boot_guard.ps1",
     "_uninstall.ps1",
 ]
 

@@ -124,7 +124,16 @@ Three installation steps:
      ④ Load Factory Defaults or update the BIOS and try again
    - BIOS menus vary a lot between vendors — consult your motherboard/laptop manual if you can't find it
 
-2. **Run the driver install script**: double-click **`安装驱动.bat`** at the root of the extracted package (or run `anykeyFilterDriver/Install_AnyKey_Filter.bat` as administrator). The script does everything in one pass: detects test mode, runs `bcdedit /set testsigning on` if needed → registers the keyboard + mouse INFs via `pnputil` → binds the UpperFilter to currently connected keyboards and mice → prompts for a reboot. **Run it once; after the reboot, test signing and the driver take effect together.** (If enabling test signing fails, Secure Boot is usually still on — disable it per step 1 and re-run the script.)
+2. **Run the driver install script**: double-click **`安装驱动.bat`** at the root of the extracted package (or run `anykeyFilterDriver/Install_AnyKey_Filter.bat` as administrator). **The script runs in two passes.**
+
+   **First run — enable test signing.** It checks Secure Boot and the current test signing state:
+   - test signing **off** → it runs `bcdedit /set testsigning on`, then **stops and asks you to reboot**. **Nothing has been installed and no keyboard or mouse setting was touched.**
+   - test signing **already on** → it goes straight to the installation steps below.
+
+   **Second run, after that reboot — install the driver.** Run the same script again: it registers the keyboard + mouse INFs via `pnputil` → binds the UpperFilter to the currently connected keyboards and mice → registers a one-shot "undo on failure" task → prompts for a reboot.
+
+   > **Why twice**: test signing only takes effect after a reboot, and binding the filter to a device while the driver still cannot be loaded would leave you with a dead keyboard and mouse after that reboot — with no way to run the uninstaller. So the script refuses to write any device setting until test signing is genuinely live; one extra run is the price.
+   > If it reports that Secure Boot is still enabled, disable it per step 1 and re-run. If the keyboard or mouse misbehaves after the reboot, the guard registered during installation rolls everything back and reboots by itself — its log is `%ProgramData%\AnyKey\boot_guard.log`.
 
 3. **Verify and use**: after reboot, the "Test Mode" watermark at the bottom-right of the desktop confirms it's active. Run `anykey/anykey-gui.exe` to edit config and start the engine, or control via the tray menu.
 
@@ -135,7 +144,7 @@ Three installation steps:
 ## 3. Uninstallation
 
 1. **Quit the app**: use the tray menu "Full exit" to cascade-close the GUI configurator and engine.
-2. **Uninstall the driver**: run `anykeyFilterDriver/Uninstall_AnyKey_Filter.bat` as administrator (double-clicking prompts for elevation). After the script removes the UpperFilter binding and unregisters the INFs, **a reboot is required** for it to fully take effect.
+2. **Uninstall the driver**: run `anykeyFilterDriver/Uninstall_AnyKey_Filter.bat` as administrator (double-clicking prompts for elevation). After the script removes the UpperFilter binding and unregisters the INFs, **a reboot is required** for it to fully take effect. It also removes the install-time failure-rollback task (`AnyKeyBootGuard`).
 3. **Optional — disable test mode**: run `bcdedit /set testsigning off` as administrator and reboot; the desktop watermark disappears, and Secure Boot can be re-enabled afterwards.
 4. **Delete files**: just delete the extracted folder (the config file `anykey_config.json` lives in the program directory and goes with it; back it up first if you want to keep your key mappings).
 
@@ -155,6 +164,8 @@ AnyKey is an "input gateway" — if the engine/driver hangs, the whole keyboard 
 | **Emergency escape hotkey** | Main thread deadlocked (the Session layer doesn't fire) | Hardware-level combo, bypasses the engine entirely | Built into the driver; hook layer in portable mode (see top of 4.1) |
 
 > **Difference between the two modes**: the emergency escape hotkey exists in both — kernel-level on the driver backend, hook-level in portable mode, the same LCtrl+Space+Esc. **Heartbeat and the 30s watchdog were removed entirely in v0.5**, so **neither** mode offers unattended automatic recovery: press the combo to recover. See the end of [Two Run Modes](#two-run-modes).
+
+**Install-time guard (driver mode).** The `UpperFilters` value makes the filter a *member* of each device's driver stack — if the image cannot be loaded, the whole stack fails to start and the device dies, and with no keyboard or mouse you cannot even run the uninstaller. So the installer refuses to touch any device key until test signing is genuinely live (and Secure Boot is off); and right before writing the first binding it registers a one-shot SYSTEM task (`AnyKeyBootGuard`). On the next boot that task checks whether the driver actually loaded: if it did, the task deletes itself; if it didn't, it removes the bindings, deletes the service and the `.sys`, and reboots into a working machine. Its log is `%ProgramData%\AnyKey\boot_guard.log`.
 
 ### 4.2 System Tray
 

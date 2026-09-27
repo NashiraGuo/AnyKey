@@ -38,7 +38,9 @@ anykey-filter-driver/deploy/*
 !anykey-filter-driver/deploy/*.inf
 !anykey-filter-driver/deploy/Install_AnyKey_Filter.bat
 !anykey-filter-driver/deploy/Uninstall_AnyKey_Filter.bat
+!anykey-filter-driver/deploy/_check_test_signing.ps1
 !anykey-filter-driver/deploy/_install_anykey_device.ps1
+!anykey-filter-driver/deploy/_boot_guard.ps1
 !anykey-filter-driver/deploy/_uninstall.ps1
 anykey-filter-driver/build.log
 *.sys
