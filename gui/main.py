@@ -225,6 +225,12 @@ class AnyKeyApp(ctk.CTk):
         self.after(1500, lambda: threading.Thread(
             target=lambda: self._ipc.send(CMD_RELOAD), daemon=True).start())
 
+        # ── 分片启动：首屏上屏后补齐侧栏与速查面板 ──
+        # 调度点必须在 __init__ 末尾（此处），不能在 ctor 内部 update()：ctor 期间
+        # 调 update 会重入事件循环，与上面的 after(1500, ...) 等回调竞争
+        # （2026-10-04 实测：ctor 内分片 → 死锁无输出）。
+        self._start_deferred_build()
+
     def _ensure_tray_running(self):
         """如果托盘未运行，启动托盘进程（优先 Rust 版 anykey-tray.exe）"""
         if self._ipc.is_connected() or self._ipc.connect():
@@ -407,13 +413,40 @@ class AnyKeyApp(ctk.CTk):
         self._sidebar.pack(side="left", fill="y", padx=(0, CARD_GAP), pady=0)
         self._sidebar.pack_propagate(False)
         self._current_app = ""  # v3: 当前编辑的应用（空=全局）
+        # ── 分片启动（阶段 1）：应用面板延后到首屏上屏之后 ──
+        # 实测（2026-10-04）：全量同步构建需 ~1.9 s 才出首屏；先把「首页 + 顶栏 +
+        # banner + 右侧编辑区」画出来上屏，侧栏与速查面板再在主线程分批补齐，
+        # 首屏延迟降到 ~0.54 s，总耗时不变。
+        #
+        # 为什么是「主线程 after」而不是后台线程：Tk 硬性要求所有控件操作在创建
+        # 它的线程上，跨线程建控件直接 RuntimeError: main thread is not in main
+        # loop（已实测）。所以只能在事件循环里让出，不能并行。
+        #
+        # 幂等：_deferred_done 记录已建成的面板，重复调用只补没建的那几个；
+        # 任何一步抛异常就不记账，下次调用重试（与 _prebuild_tab 的 except 分支
+        # 同一策略：失败即视为「未构建」）。
+        # 命名用 _done 而非 _pending：pending 空集是 falsy，判 `if not pending: return`
+        # 会在首次调用时直接返回（2026-10-04 实测踩过：回调根本不执行）。
+        self._deferred_done = set()
         self._build_app_panel()
-        # 初始化应用下拉（config 中已有的 apps）
+        # 初始化应用下拉（config 中已有的 apps）—— _app_panel 不存在时内部有
+        # hasattr 守卫（_update_edit_target_banner 末尾 / _refresh_app_dropdown），
+        # 所以延后期间调用是安全的；建成后面板自己会补一次同步。
         self._update_edit_target_banner()
         # app 与 device 之间的分割线
         ctk.CTkFrame(self._sidebar, height=1, fg_color=_THEME["border"]
                      ).pack(fill="x", padx=8, pady=2)
-        self._build_device_panel()
+        # ── 分片启动（阶段 2）：设备面板延后 ──
+        # 它是启动期最大的一块（~900 ms：_refresh_devices 建全部设备行 + 联动着色）。
+        # 延后安全依据（全部实测自现有代码，非假设）：
+        #   · _refresh_devices / _build_global_entry_row 只在自己内部建 _dev_list 行；
+        #   · _select_edit_target → _update_device_selection_ui 全用
+        #     getattr(self, ..., None) 守卫，_dev_list 不存在时静默跳过；
+        #   · _apply_backend_ui 用 getattr(self, "_per_device_sw", None) 守卫；
+        #   · _build_ui 末尾的 switch_tab("combo") 只碰右侧编辑区，不碰侧栏。
+        # 建成后面板自己会调 _refresh_devices + _apply_backend_ui 完成初始化。
+        # self._build_device_panel()   ← 移入 _build_deferred_panels()
+
 
         right_col = ctk.CTkFrame(main_body, fg_color="transparent")
         right_col.pack(side="left", fill="both", expand=True)
@@ -456,7 +489,15 @@ class AnyKeyApp(ctk.CTk):
                                           height=160)
         self._inspector_area.grid(row=1, column=0, sticky="nsew", pady=(CARD_GAP, 0))
         self._inspector_area.pack_propagate(False)
-        self._build_key_presets()
+        # ── 分片启动（阶段 3）：按键速查面板延后 ──
+        # 95 个 CTkButton（~450 ms，见 main.py 内 render_category）。容器
+        # _inspector_area 已建且高度固定 160，内容后填不影响布局。
+        # 尺寸纪律（2026-07-27 定案）：这里不依赖 winfo_width —— 速查面板用
+        # Canvas 滚动容器 + 两列 grid，按钮尺寸全是写死的 BTN_W/BTN_H 常量，
+        # 换行数由 PER_ROW/PER_ROW_NEXT 固定，**不按容器宽度重算**，所以
+        # 延后到窗口已上屏后构建不会产生 07-27 那种「估算宽度 → canvas.scale
+        # → Configure 级联 → 页面跳动」。
+        # self._build_key_presets()   ← 移入 _build_deferred_panels()
 
         switch_tab("combo")
         self._selected_kb_key = None
@@ -481,13 +522,112 @@ class AnyKeyApp(ctk.CTk):
         finally:
             self._prebuilding = False
 
+    # ──────────────────────────────────────────────
+    # 分片启动：首屏上屏后，在主线程分批补齐剩余面板
+    # ──────────────────────────────────────────────
+    def _build_deferred_panels(self):
+        """首屏上屏后调用：分批补齐侧栏面板与速查面板。
+
+        分片而非一次建完，是为了让 Tk 有机会把每一批的中间态画出去 ——
+        否则「一批建 1.2 s」用户仍会看到卡顿，只是卡在第二屏。
+
+        幂等：_deferred_done 记录已建成的项；失败不记账，下次调用重试
+        （各 build_* 开头有「已建则返回」守卫，重入安全）。
+        窗口已销毁时直接放弃（不对已死的 Tcl 解释器操作）。
+        """
+        # 注意：不能用 `if not self._deferred_done: return` —— 空 set 是 falsy，
+        # 会让首次调用直接返回（2026-10-04 实测踩过：回调根本不执行）。
+        done = getattr(self, "_deferred_done", None)
+        if done is None:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return          # Tcl 解释器已销毁
+
+        # 逐项：先建 → 成功才记账 → 让 Tk 喘口气（下一批前给一次机会重绘）
+        # 注意 fn 是「已绑定方法」，直接调用即可 —— 不能再 fn(self)。
+        for name, fn in (("app",    self._build_app_panel),
+                         ("device", self._build_device_panel),
+                         ("presets", self._build_key_presets)):
+            if name in done:
+                continue
+            try:
+                fn()
+                done.add(name)
+            except Exception as e:
+                print(f"[deferred] build {name} failed: {type(e).__name__}: {e}")
+            # 每项之后让出一次：处理绘制 + 让用户看到进展
+            try:
+                self.update_idletasks()
+            except Exception:
+                return
+
+        # 全部建成 → 补一次「当前编辑目标」的联动着色。
+        # __init__ 里的 _select_edit_target 早于侧栏建成就跑了（当时控件不存在，
+        # _update_device_selection_ui 的 getattr 守卫让它静默跳过），所以这里
+        # 建成后再跑一遍，把全局/设备选中态补上。
+        if len(done) >= 3:
+            try:
+                self._update_device_selection_ui()
+                self._update_edit_target_banner()
+                self._refresh_app_dropdown()
+            except Exception as e:
+                print(f"[deferred] post-sync error: {type(e).__name__}: {e}")
+            return
+        # 还有失败项 → 让出后再试一轮。
+        # 次数上限：避免「永久失败 → after 无限链 → 事件循环空转」把 CPU 吃满。
+        tries = getattr(self, "_deferred_tries", 0) + 1
+        self._deferred_tries = tries
+        if tries >= 5:
+            print(f"[deferred] giving up after {tries} rounds; built={sorted(done)}")
+            return
+        try:
+            self.after(200 * tries, self._build_deferred_panels)
+        except Exception:
+            pass
+
+    def _start_deferred_build(self):
+        """把 _build_deferred_panels 挂到事件循环上（首屏画完后再开始）。
+
+        必须在 __init__ 全部结束后调用：ctor 期间调 update() 会重入事件循环，
+        与既有 after(1500, ...) 等回调竞争（2026-10-04 实测：ctor 内分片会死锁）。
+
+        为什么先 update_idletasks() 再 after(60) 而不是直接 after(0)：
+        after(0) 在事件循环**第一轮**就执行，而那一轮 update() 会连带把整个
+        分片链同步跑完（实测 1803 ms）—— 首屏反而被延后到 2.5 s，等于没优化。
+        先 update_idletasks() 把「首页已画完」这件事落实（只处理绘制与空闲
+        回调，不触发 after 定时器），再 after(60) 让出一个事件循环轮次，
+        首屏才真的先上屏。
+        """
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+        try:
+            self.after(60, self._build_deferred_panels)
+        except Exception as e:
+            print(f"[deferred] schedule failed: {type(e).__name__}: {e}")
+
     def _build_app_panel(self):
         """应用设置侧栏面板（设备栏上方）"""
+        if getattr(self, "_app_panel", None) is not None:
+            return          # 已建过（分片启动可能重复调用）
         _set_theme(_THEME)
         self._app_panel = AppPanel(self._sidebar, width=192)
         self._app_panel.on_app_change = self._on_app_selected
+        # 建成即补一次下拉同步：延后期间 _update_edit_target_banner /
+        # _refresh_app_dropdown 都因 hasattr 守卫跳过了，这里补齐。
+        try:
+            self._refresh_app_dropdown()
+        except Exception:
+            pass
 
     def _build_device_panel(self):
+        # 分片启动可能重复调用（失败重试）→ 已建则返回
+        if getattr(self, "_dev_list", None) is not None:
+            return
         inner = ctk.CTkFrame(self._sidebar, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=8, pady=4)
 
@@ -1058,6 +1198,9 @@ class AnyKeyApp(ctk.CTk):
 
     def _build_key_presets(self):
         """按键预设面板——两列布局，每列内按钮自动换行，超出滚动"""
+        # 分片启动可能重复调用（失败重试）→ 已建则返回
+        if getattr(self, "_key_presets_built", False):
+            return
         # 标题
         bar = ctk.CTkFrame(self._inspector_area, fg_color="transparent")
         bar.pack(fill="both", expand=True, padx=6, pady=4)
@@ -1197,6 +1340,9 @@ class AnyKeyApp(ctk.CTk):
         _bind_ps_children(scroll)
         scroll.bind("<MouseWheel>", _ps_wheel_fn)
         preset_canvas.bind("<MouseWheel>", _ps_wheel_fn)
+        # 全部子控件创建完毕才置位（分片启动的重试判据）。
+        # 纪律：中途抛异常时这里不会执行 → 保持「未建成」→ 下次重试。
+        self._key_presets_built = True
 
     def _insert_preset_global(self, key_str):
         if key_str is None:
