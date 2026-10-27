@@ -250,3 +250,52 @@ pub struct AppOverride {
     #[serde(default, rename = "tapDance")]
     pub layers:     Option<HashMap<String, HashMap<String, KeyEntry>>>,
 }
+
+/// 收集「全局层出现 `{unmap}`」的位置说明，供引擎启动时逐条告警。
+///
+/// 为什么需要：`{unmap}` 只在覆盖桶里有「删除下层」的含义。写在全局层等于写错位置 ——
+/// 该字段按空处理、该行按不存在处理（否则这个字符串会流进管道，被 `send_key` 当未知
+/// 键名，只打一行 debug 然后什么都不发 = 静默丢键）。全局改了配置却"按键没反应"时，
+/// 这行告警就是唯一线索，所以按条目逐条列出来。
+///
+/// 输出顺序稳定（层名/键名排序），便于日志比对。
+pub fn unmap_warnings(config: &Config) -> Vec<String> {
+    use crate::util::{is_unmap_output, UNMAP_TOKEN};
+    let mut out: Vec<String> = Vec::new();
+
+    for r in &config.combo_map {
+        if is_unmap_output(&r.output) {
+            out.push(format!(
+                "全局 comboMap: {} + {} @{} —— {} 只在应用/设备覆盖里生效，该行已按「不存在」忽略",
+                r.key1, r.key2, r.layer, UNMAP_TOKEN));
+        }
+    }
+    for s in &config.leader.sequences {
+        if is_unmap_output(&s.output) {
+            out.push(format!(
+                "全局 leader: {} —— {} 只在应用/设备覆盖里生效，该序列已按「不存在」忽略",
+                s.keys.join(","), UNMAP_TOKEN));
+        }
+    }
+
+    let mut layer_names: Vec<&String> = config.layers.layer_maps.keys().collect();
+    layer_names.sort();
+    for ln in layer_names {
+        let mut phys_keys: Vec<&String> = config.layers.layer_maps[ln].keys().collect();
+        phys_keys.sort();
+        for phys in phys_keys {
+            let e = &config.layers.layer_maps[ln][phys];
+            let hit: Vec<&str> = [("tap", &e.tap), ("hold", &e.hold), ("dt", &e.dt), ("dh", &e.dh)]
+                .into_iter()
+                .filter(|(_, v)| is_unmap_output(v))
+                .map(|(f, _)| f)
+                .collect();
+            if !hit.is_empty() {
+                out.push(format!(
+                    "全局 tapDance: {} 层 {} 的 {} 字段 —— {} 只在应用/设备覆盖里生效，该字段已按空处理",
+                    ln, phys, hit.join("/"), UNMAP_TOKEN));
+            }
+        }
+    }
+    out
+}

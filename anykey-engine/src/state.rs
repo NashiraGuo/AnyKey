@@ -579,20 +579,13 @@ impl PipelineState {
             config.leader.sequences = kept;
         }
 
-     // v3: 从 config 构建初始 mapping（测试兼容）
-    let init_mapping = crate::runtime_builder::build_tap_dance_map(&config.layers, &config.combo_map);
-    let init_combo = crate::runtime_builder::build_combo_index(&config.combo_map);
-    let init_leader = LeaderDef {
-        sequences: config.leader.sequences.clone(),
-        timeout_ms: config.leader.timeout_ms,
-    };
+     // v3: 从 config 构建初始 mapping（测试兼容）；走统一入口 —— 覆盖层的 `{unmap}`
+     // 只在这里被解释一次，管道永远看不到这个字符串（docs/design_unmap_override.md）
+    let init_mapping = crate::runtime_builder::build_mapping(
+        &config.layers, &config.combo_map, &config.leader);
     let mut s = Self {
         tick: 0,
-        mapping: Arc::new(DeviceMapping {
-            tap_dance: init_mapping,
-            combo: init_combo,
-            leader: init_leader,
-        }),
+        mapping: Arc::new(init_mapping),
         state: DeviceState::default(),
         // 占位值：真实 emit 之前必有输入事件（main.rs 在入口把它设成该事件的 device_id），
         // 所以它只影响"无触发设备就 emit"这种病态路径。

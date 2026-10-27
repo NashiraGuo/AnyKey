@@ -1,8 +1,12 @@
 //! runtime_builder 单元测试（从 src/runtime_builder.rs 的 #[cfg(test)] 模块分离）。
 //! 作为集成测试放在 tests/ 目录，仅可访问 pub API。
 
-use anykey_engine::config::{AppOverride, ComboRow, Config, DeviceInfo, DeviceOverride, KeyEntry, LeaderSequence};
-use anykey_engine::state::{ComboIndex, DeviceMapping, LeaderDef};
+use anykey_engine::config::{
+    AppAwareConfig, AppOverride, ComboRow, Config, DeviceInfo, DeviceOverride, KeyEntry,
+    LeaderConfig, LeaderSequence, Layers,
+};
+use anykey_engine::util::is_unmap_output;
+use anykey_engine::state::{ComboIndex, DeviceMapping, KeyDef, LeaderDef};
 use anykey_engine::runtime_builder::*;
 use std::collections::HashMap;
 
@@ -190,4 +194,206 @@ fn app_override_case_insensitive() {
     assert_eq!(e.hold, "{f}");
     assert_eq!(e.double_tap, "{g}");
     assert_eq!(e.double_hold, "{r}");
+}
+
+// ══════════════════════════════════════════════════════════════
+// {unmap}：覆盖层的「删除本层条目」标记（docs/design_unmap_override.md）
+// ══════════════════════════════════════════════════════════════
+
+/// 全局配置：a+s@base → {left}、a+s@fn2 → {home}（同一对键在两层各有条目）；
+/// CapsLock 点按 {esc} / 按住切 fn1；leader q,w → {esc}。
+fn cfg_with_global() -> Config {
+    let mut base = HashMap::new();
+    base.insert("capslock".to_string(), KeyEntry {
+        tap: "{esc}".into(), hold: "{fn1}".into(), ht: "150".into(), ..Default::default()
+    });
+    Config {
+        combo_time: 200,
+        combo_map: vec![
+            ComboRow { key1: "a".into(), key2: "s".into(), output: "{left}".into(), layer: "base".into() },
+            ComboRow { key1: "a".into(), key2: "s".into(), output: "{home}".into(), layer: "fn2".into() },
+        ],
+        layers: Layers {
+            layer_maps: [("base".to_string(), base)].into_iter().collect(),
+            hold_term: 150, double_tap_term: 250, double_hold_term: 150,
+        },
+        leader: LeaderConfig {
+            timeout_ms: 2000,
+            sequences: vec![LeaderSequence {
+                keys: vec!["q".into(), "w".into()], output: "{esc}".into(), timeout_ms: 0,
+            }],
+            loop_capture: false,
+        },
+        subscribed_devices: vec![],
+        devices: HashMap::new(),
+        app_aware: AppAwareConfig::default(),
+        per_device: false,
+    }
+}
+
+fn with_app(mut cfg: Config, app: &str, ov: AppOverride) -> Config {
+    cfg.app_aware.apps.insert(app.to_string(), ov);
+    cfg
+}
+
+fn combo_has(m: &DeviceMapping, layer: &str, key: &str) -> bool {
+    m.combo.map.get(layer).map_or(false, |km| km.contains_key(key))
+}
+
+fn td_field(m: &DeviceMapping, phys: &str, layer: &str) -> Option<KeyDef> {
+    m.tap_dance.get(phys).and_then(|lm| lm.get(layer)).cloned()
+}
+
+#[test]
+fn unmap_clears_combo_only_in_named_layer() {
+    let cfg = with_app(cfg_with_global(), "streetfighter6.exe", AppOverride {
+        combo_map: Some(vec![ComboRow {
+            key1: "a".into(), key2: "s".into(), output: "{unmap}".into(), layer: "base".into(),
+        }]),
+        ..Default::default()
+    });
+
+    let dev = build_default_runtime(&cfg);
+    assert!(combo_has(&dev, "base", "a"), "前提：全局 base 层有 a+s");
+    assert!(combo_has(&dev, "fn2", "a"), "前提：全局 fn2 层也有 a+s");
+
+    let m = apply_app_override(&cfg, 1, "streetfighter6.exe", &dev);
+    assert!(!combo_has(&m, "base", "a"), "base 层 a+s 应被 {{unmap}} 清除");
+    assert!(combo_has(&m, "fn2", "a"), "只清 base 层，fn2 的同键对应保留");
+    assert!(m.leader.sequences.len() == 1, "未涉及的 leader 序列不受影响");
+}
+
+#[test]
+fn unmap_clears_single_td_field() {
+    let mut ov_base = HashMap::new();
+    ov_base.insert("capslock".to_string(), KeyEntry {
+        tap: "{esc}".into(), hold: "{unmap}".into(), ..Default::default()
+    });
+    let cfg = with_app(cfg_with_global(), "sf6.exe", AppOverride {
+        layers: Some([("base".to_string(), ov_base)].into_iter().collect()),
+        ..Default::default()
+    });
+
+    let m = apply_app_override(&cfg, 1, "sf6.exe", &build_default_runtime(&cfg));
+    let e = td_field(&m, "capslock", "base").expect("tap 仍在 → 条目应保留");
+    assert_eq!(e.tap, "{esc}", "未动的字段保持覆盖行自己的值");
+    assert_eq!(e.hold, "", "hold 应被 {{unmap}} 置空");
+    assert!(!e.has_td(), "无 hold/dt/dh → 退化为纯点按重映射");
+}
+
+#[test]
+fn unmap_clears_whole_td_entry_when_all_fields_empty() {
+    let mut ov_base = HashMap::new();
+    ov_base.insert("capslock".to_string(), KeyEntry {
+        tap: "{unmap}".into(), hold: "{unmap}".into(),
+        dt: "{unmap}".into(), dh: "{unmap}".into(), ht: "150".into(),
+        ..Default::default()
+    });
+    let cfg = with_app(cfg_with_global(), "sf6.exe", AppOverride {
+        layers: Some([("base".to_string(), ov_base)].into_iter().collect()),
+        ..Default::default()
+    });
+
+    let m = apply_app_override(&cfg, 1, "sf6.exe", &build_default_runtime(&cfg));
+    assert!(!m.tap_dance.contains_key("capslock"),
+            "四字段全空 → 整条不存在（ht 也随之失效）");
+}
+
+#[test]
+fn unmap_clears_leader_sequence() {
+    let cfg = with_app(cfg_with_global(), "sf6.exe", AppOverride {
+        leader: Some(vec![LeaderSequence {
+            keys: vec!["q".into(), "w".into()], output: "{unmap}".into(), timeout_ms: 0,
+        }]),
+        ..Default::default()
+    });
+
+    let m = apply_app_override(&cfg, 1, "sf6.exe", &build_default_runtime(&cfg));
+    assert!(m.leader.sequences.is_empty(), "被 {{unmap}} 的序列不应存在");
+}
+
+#[test]
+fn unmap_in_inner_layer_can_be_added_back() {
+    // 外层（应用）清掉 a+s@base，内层（设备）同 identity 重新给出 → 内层优先
+    let mut cfg = with_app(cfg_with_global(), "sf6.exe", AppOverride {
+        combo_map: Some(vec![ComboRow {
+            key1: "a".into(), key2: "s".into(), output: "{unmap}".into(), layer: "base".into(),
+        }]),
+        ..Default::default()
+    });
+    cfg.subscribed_devices.push(DeviceInfo {
+        vid: "1234".into(), pid: "5678".into(), alias: "kbd".into(),
+        guid: Some("DEV-A".into()), runtime_device_id: Some(7), hardware_id: None,
+        kind: "keyboard".into(), domain_id: None, enabled: true,
+    });
+    cfg.devices.insert("DEV-A".into(), DeviceOverride {
+        combo_map: Some(vec![ComboRow {
+            key1: "a".into(), key2: "s".into(), output: "{right}".into(), layer: "base".into(),
+        }]),
+        ..Default::default()
+    });
+
+    let (ctxs, _) = build_multi_device_contexts(&cfg, &[7], &[7].into_iter().collect());
+    let m = apply_app_override(&cfg, 7, "sf6.exe", &ctxs[&7].mapping);
+    assert_eq!(
+        m.combo.map.get("base").and_then(|km| km.get("a")).and_then(|p| p.get("s")),
+        Some(&"{right}".to_string()),
+        "更内层（设备）可以把它加回来 —— 内层优先，与覆盖规则一致"
+    );
+}
+
+#[test]
+fn unmap_in_global_layer_is_dropped_and_warned() {
+    let mut cfg = cfg_with_global();
+    cfg.combo_map.push(ComboRow {
+        key1: "x".into(), key2: "y".into(), output: "{unmap}".into(), layer: "base".into(),
+    });
+    cfg.layers.layer_maps.get_mut("base").unwrap().get_mut("capslock").unwrap().hold = "{unmap}".into();
+
+    let warns = anykey_engine::config::unmap_warnings(&cfg);
+    assert_eq!(warns.len(), 2, "一条 combo + 一条 tapDance 字段，各告警一次: {:?}", warns);
+    assert!(warns.iter().any(|w| w.contains("comboMap") && w.contains("x + y")));
+    assert!(warns.iter().any(|w| w.contains("tapDance") && w.contains("hold")));
+
+    let m = build_default_runtime(&cfg);
+    assert!(!combo_has(&m, "base", "x"), "全局的 {{unmap}} 行按「不存在」处理");
+    let e = td_field(&m, "capslock", "base").expect("tap 仍在，条目保留");
+    assert_eq!(e.hold, "", "全局的 {{unmap}} 字段按空处理");
+    assert_eq!(e.tap, "{esc}", "其余字段不受影响");
+    // 最关键的不变量：这个字符串绝不能进 mapping（否则管道会当未知键名静默丢弃）
+    for lm in m.tap_dance.values() {
+        for e in lm.values() {
+            for v in [&e.tap, &e.hold, &e.double_tap, &e.double_hold] {
+                assert!(!v.contains("unmap"), "mapping 里不允许残留 {{unmap}}: {}", v);
+            }
+        }
+    }
+}
+
+#[test]
+fn unmap_applies_when_per_device_disabled() {
+    // perDevice=false：设备桶被忽略，但「全局 × app」这条路径仍要生效
+    let cfg = with_app(cfg_with_global(), "sf6.exe", AppOverride {
+        combo_map: Some(vec![ComboRow {
+            key1: "a".into(), key2: "s".into(), output: "{unmap}".into(), layer: "base".into(),
+        }]),
+        ..Default::default()
+    });
+    assert!(!cfg.per_device);
+
+    let mut mgr = RuntimeManager::new();
+    mgr.build_app_mappings(&cfg, &[1], "sf6.exe");
+    let m = mgr.lookup_mapping(1, "sf6.exe").expect("perDevice=false 也应构建全局×app map");
+    assert!(!combo_has(&m, "base", "a"));
+}
+
+#[test]
+fn unmap_token_is_case_insensitive_but_strict() {
+    assert!(is_unmap_output("{unmap}"));
+    assert!(is_unmap_output("{UNMAP}"));
+    assert!(is_unmap_output("  {Unmap}\t"));
+    assert!(!is_unmap_output("unmap"), "裸写不认（会被当文本输出）");
+    assert!(!is_unmap_output("{unmap }"), "内部空格不认");
+    assert!(!is_unmap_output("{unmapped}"));
+    assert!(!is_unmap_output(""));
 }

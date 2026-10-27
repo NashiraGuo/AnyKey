@@ -1,9 +1,9 @@
 //! runtime_builder — builds Runtime { mapping, state } from config.
 //! Also manages Runtime pool (RuntimeManager) for app-aware switching.
 
-use crate::config::{ComboRow, Config, KeyEntry, LeaderSequence, Layers};
+use crate::config::{ComboRow, Config, KeyEntry, LeaderConfig, LeaderSequence, Layers};
 use crate::state::{DeviceMapping, DeviceContext, RuntimeDomain, LeaderDef, KeyDef, ComboIndex, DeviceState};
-use crate::util::{norm_key, normalize_layer_name, regex_lazy, parse_u64_opt};
+use crate::util::{is_unmap_output, norm_key, normalize_layer_name, regex_lazy, parse_u64_opt};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -97,6 +97,52 @@ pub fn merge_layers(global: &Layers, ov: Option<&HashMap<String, HashMap<String,
     out
 }
 
+// ── 构建入口：`{unmap}` 的唯一解释点 ──
+
+/// `{unmap}` 的解释点 + 唯一的索引构建入口。语义见 `docs/design_unmap_override.md`：
+/// 条目输出（或 TapDance 的 tap/hold/dt/dh 字段）写成 `{unmap}` = 「本层没有这个条目/字段」。
+///
+/// **为什么解释放在构建前，而不是 `merge_*` 内部**：合并是「整条替换」
+/// （`merge_layers` 是 `target.insert`），标记会随最后写入的那一行一路走到最终切片，
+/// 所以只需在构造索引之前扫一次 —— 三个 merge 函数不必认识这个标记。
+/// 前提是合并保持整条替换；若哪天改成字段级合并，这个结论要重新审视。
+///
+/// 全局层写 `{unmap}` 也在这里被吞掉（字段置空 / 整行丢弃），因为它**绝不能进入管道**：
+/// `send_key` 会把它当未知键名，只打一行 debug 然后什么都不发（静默丢键）。
+/// 全局层的错误位置由 `config::unmap_warnings` 在启动时告警。
+pub fn build_mapping(
+    layers: &Layers,
+    combos: &[ComboRow],
+    leader: &LeaderConfig,
+) -> DeviceMapping {
+    let mut layers = layers.clone();
+    let mut combos = combos.to_vec();
+    let mut sequences = leader.sequences.clone();
+    apply_unmap(&mut layers, &mut combos, &mut sequences);
+    DeviceMapping {
+        tap_dance: build_tap_dance_map(&layers, &combos),
+        combo: build_combo_index(&combos),
+        leader: LeaderDef { sequences, timeout_ms: leader.timeout_ms },
+    }
+}
+
+/// 就地剔除 `{unmap}`：combo/leader 整行丢弃；TD 字段置空；四字段全空的条目整条丢弃
+/// （`ht`/`dtt`/`dht` 随之失效 —— 没有输出就没有 TapDance）。
+fn apply_unmap(layers: &mut Layers, combos: &mut Vec<ComboRow>, sequences: &mut Vec<LeaderSequence>) {
+    combos.retain(|r| !is_unmap_output(&r.output));
+    sequences.retain(|s| !is_unmap_output(&s.output));
+    for map in layers.layer_maps.values_mut() {
+        for entry in map.values_mut() {
+            for f in [&mut entry.tap, &mut entry.hold, &mut entry.dt, &mut entry.dh] {
+                if is_unmap_output(f) { f.clear(); }
+            }
+        }
+        map.retain(|_, e| {
+            !(e.tap.is_empty() && e.hold.is_empty() && e.dt.is_empty() && e.dh.is_empty())
+        });
+    }
+}
+
 pub fn build_tap_dance_map(layers: &Layers, combo_map: &[ComboRow]) -> HashMap<String, HashMap<String, KeyDef>> {
     let mut keys: HashMap<String, HashMap<String, KeyDef>> = HashMap::new();
     let base_layer = layers.base();
@@ -176,23 +222,11 @@ pub fn build_tap_dance_map(layers: &Layers, combo_map: &[ComboRow]) -> HashMap<S
 /// Build DeviceContext from global config (single-device mode).
 /// Returns HashMap keyed by device ID — single-device → {1: DeviceContext}.
 pub fn build_default_device_context(config: &Config) -> (HashMap<u32, DeviceContext>, HashMap<u32, RuntimeDomain>) {
-    let tap_dance_map = build_tap_dance_map(&config.layers, &config.combo_map);
-    let combo_index = build_combo_index(&config.combo_map);
-    let leader = LeaderDef {
-        sequences: config.leader.sequences.clone(),
-        timeout_ms: config.leader.timeout_ms
-    };
+    let mapping = build_mapping(&config.layers, &config.combo_map, &config.leader);
     let mut contexts = HashMap::new();
     let mut domains  = HashMap::new();
     domains.insert(1, RuntimeDomain::new(1));
-    contexts.insert(1, DeviceContext {
-        mapping: DeviceMapping {
-            tap_dance: tap_dance_map,
-            combo: combo_index,
-            leader
-        },
-        domain_id: 1
-    });
+    contexts.insert(1, DeviceContext { mapping, domain_id: 1 });
     (contexts, domains)
 }
 
@@ -203,13 +237,8 @@ pub fn build_multi_device_contexts(
     device_ids: &[u32],
     subscribed: &HashSet<u32>,
 ) -> (HashMap<u32, DeviceContext>, HashMap<u32, RuntimeDomain>) {
-    // 全局基础映射（预构建一次）
-    let global_td = build_tap_dance_map(&config.layers, &config.combo_map);
-    let global_combo = build_combo_index(&config.combo_map);
-    let global_leader = LeaderDef {
-        sequences: config.leader.sequences.clone(),
-        timeout_ms: config.leader.timeout_ms
-    };
+    // 全局基础映射（预构建一次，供无覆盖/未订阅设备 clone；`{unmap}` 已在这里解释掉）
+    let global_mapping = build_mapping(&config.layers, &config.combo_map, &config.leader);
     // 未订阅设备的空映射（纯透传）
     let empty_mapping = DeviceMapping {
         tap_dance: HashMap::new(),
@@ -237,23 +266,16 @@ pub fn build_multi_device_contexts(
                 .or_else(|| sd.map(|d| format!("{}:{}:{}", d.vid, d.pid, d.kind)));
             let ov = key.as_ref().and_then(|k| config.devices.get(k));
             match ov {
-                None => DeviceMapping {
-                    tap_dance: global_td.clone(),
-                    combo: global_combo.clone(),
-                    leader: global_leader.clone()
-                },
+                None => global_mapping.clone(),
                 Some(o) => {
                     let merged_layers = merge_layers(&config.layers, o.layers.as_ref());
                     let merged_combos = merge_combos(&config.combo_map, o.combo_map.as_deref());
-                    let merged_leader = LeaderDef {
+                    let merged_leader = LeaderConfig {
                         sequences: merge_leader(&config.leader.sequences, o.leader.as_deref()),
-                        timeout_ms: config.leader.timeout_ms
+                        timeout_ms: config.leader.timeout_ms,
+                        loop_capture: config.leader.loop_capture,
                     };
-                    DeviceMapping {
-                        tap_dance: build_tap_dance_map(&merged_layers, &merged_combos),
-                        combo: build_combo_index(&merged_combos),
-                        leader: merged_leader
-                    }
+                    build_mapping(&merged_layers, &merged_combos, &merged_leader)
                 }
             }
         };
@@ -318,13 +340,13 @@ pub fn apply_app_override(config: &Config, device_id: u32, app: &str, dev_mappin
     let dev_app_ov = dev_ov.and_then(|o| o.apps.as_ref()).and_then(|apps| apps.get(app));
     let final_layers = merge_layers(&layers_after_dev, dev_app_ov.and_then(|o| o.layers.as_ref()));
     let final_combos = merge_combos(&combos_after_dev, dev_app_ov.and_then(|o| o.combo_map.as_deref()));
-    let final_leader = merge_leader(&leader_after_dev, dev_app_ov.and_then(|o| o.leader.as_deref()));
+    let final_leader = LeaderConfig {
+        sequences: merge_leader(&leader_after_dev, dev_app_ov.and_then(|o| o.leader.as_deref())),
+        timeout_ms: config.leader.timeout_ms,
+        loop_capture: config.leader.loop_capture,
+    };
 
-    DeviceMapping {
-        tap_dance: build_tap_dance_map(&final_layers, &final_combos),
-        combo:     build_combo_index(&final_combos),
-        leader:    LeaderDef { sequences: final_leader, timeout_ms: config.leader.timeout_ms }
-    }
+    build_mapping(&final_layers, &final_combos, &final_leader)
 }
 
 // ── RuntimeManager v3: mapping(device,app) + state(domain) ──

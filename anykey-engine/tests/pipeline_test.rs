@@ -1142,3 +1142,53 @@ fn test_combo_identity_includes_layer() {
     }
     assert!(has_left && has_home, "left={} home={}", has_left, has_home);
 }
+
+// ══════════════════════════════════════════════════════════════
+// {unmap}：清除后按键必须「立即直通」，不残留 combo / hold 等待
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn unmap_makes_key_pass_through_without_waiting() {
+    use anykey_engine::runtime_builder::{apply_app_override, build_default_runtime};
+    use std::sync::Arc;
+
+    // 全局：a+s 是一条 combo；a 自己还有「按住 = shift」的 TD 等待
+    let mut cfg = test_config();
+    cfg.combo_map = vec![ComboRow {
+        key1: "a".into(), key2: "s".into(), output: "{left}".into(), layer: "base".into(),
+    }];
+    cfg.layers.layer_maps.entry("base".into()).or_default().insert("a".into(), KeyEntry {
+        tap: "{a}".into(), hold: "{shift}".into(), ht: "150".into(), ..Default::default()
+    });
+
+    // 对照组：全局映射下按下 a → 既被 combo 等伙伴压住，也起了 TD 计时
+    let mut before = PipelineState::new(cfg.clone());
+    before.key_down("a");
+    assert!(before.emit_log.is_empty(), "对照组：未清除时按键被等待压住，不应立即输出");
+    assert!(!before.timer_heap.is_empty(), "对照组：未清除时应起 combo / hold 计时器");
+
+    // 应用覆盖：combo 清掉 + 该键 TD 条目整条清掉
+    let mut ov_base = HashMap::new();
+    ov_base.insert("a".into(), KeyEntry {
+        tap: "{unmap}".into(), hold: "{unmap}".into(),
+        dt: "{unmap}".into(), dh: "{unmap}".into(), ..Default::default()
+    });
+    cfg.app_aware.apps.insert("streetfighter6.exe".into(), AppOverride {
+        combo_map: Some(vec![ComboRow {
+            key1: "a".into(), key2: "s".into(), output: "{unmap}".into(), layer: "base".into(),
+        }]),
+        layers: Some([("base".to_string(), ov_base)].into_iter().collect()),
+        ..Default::default()
+    });
+
+    let merged = apply_app_override(&cfg, 1, "streetfighter6.exe", &build_default_runtime(&cfg));
+    let mut s = PipelineState::new(cfg.clone());
+    s.mapping = Arc::new(merged);
+    s.key_down("a");
+
+    assert!(s.timer_heap.is_empty(), "清除后不应起任何计时器（无 combo 等待、无 hold 判定）");
+    match s.emit_log.last() {
+        Some(EmitEvent::Down(k, _)) => assert_eq!(k, "a", "应原样输出按键自身"),
+        other => panic!("清除后按键应立即原生输出，实际为 {:?}", other),
+    }
+}

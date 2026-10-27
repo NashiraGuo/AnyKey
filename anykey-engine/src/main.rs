@@ -5,7 +5,7 @@
 #![windows_subsystem = "windows"]
 
 use anykey_engine::state::{PipelineState, EmitEvent, TimerKind, DeviceMapping};
-use anykey_engine::config::Config;
+use anykey_engine::config::{Config, unmap_warnings};
 use anykey_engine::emit::{key_name_to_scancode, send_key_down_sendinput, send_key_up_sendinput};
 use anykey_engine::app_sensor::AppSensor;
 use anykey_engine::runtime_builder::RuntimeManager;
@@ -261,6 +261,13 @@ fn main() {
             return;
         }
     };
+
+    // `{unmap}` 是覆盖层的「删除本层条目」标记（docs/design_unmap_override.md）。
+    // 写在全局层等于写错位置：会被按「字段为空 / 行不存在」处理掉。这里逐条告警，
+    // 否则用户只看得到"某个键彻底没反应"，没有任何线索。
+    for w in unmap_warnings(&config) {
+        log!("WARN {}", w);
+    }
 
     let mut pipeline = PipelineState::new(config);
     pipeline.debug_enabled = debug_enabled;

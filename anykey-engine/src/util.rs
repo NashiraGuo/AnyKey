@@ -150,6 +150,27 @@ pub fn is_layer_key(output: &str) -> bool {
     re.is_match(output)
 }
 
+/// 覆盖层的「删除」标记 —— 把条目的输出（或 TapDance 的 tap/hold/dt/dh 字段）写成
+/// `{unmap}`，表示「**本层没有**这个条目/这个字段」，其余层照常继承。
+///
+/// 它在覆盖桶（`appAware.apps[app]` / `devices[guid]` / `devices[guid].apps[app]`）里
+/// 才有删除含义；解释点是 `runtime_builder::build_mapping`，发生在构建索引之前，
+/// 因此**管道永远看不到这个字符串**。
+///
+/// 全局层写它等于「该字段为空 / 该行不成立」—— 由 `config::unmap_warnings` 在启动时
+/// 逐条告警，避免"以为能删、实际只是写错位置"。
+///
+/// 大小写不敏感（与 `{Sleep N}` / `{Select N}` 的既有约定一致）；裸写 `unmap`
+/// （不带花括号）不认 —— 它会被当文本原样打出，可见、不静默。
+/// 设计文档：`docs/design_unmap_override.md`
+pub const UNMAP_TOKEN: &str = "{unmap}";
+
+/// 是否为 `{unmap}` 标记（容忍首尾空白与大小写）。
+pub fn is_unmap_output(s: &str) -> bool {
+    let t = s.trim();
+    t.len() == UNMAP_TOKEN.len() && t.eq_ignore_ascii_case(UNMAP_TOKEN)
+}
+
 pub fn parse_u64_opt(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() { None } else { s.parse::<u64>().ok() }
