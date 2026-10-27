@@ -287,6 +287,11 @@ class AnyKeyApp(ctk.CTk):
                 self._apply_override_badges()
             except Exception:
                 pass
+            # 保存后 app 桶可能刚建立 / 刚被清空 → 同步下拉圆点（● 已配置 / ○ 仅运行）
+            try:
+                self._refresh_app_dropdown()
+            except Exception as e:
+                print("refresh app dropdown error:", e)
             # 静默更新状态栏（如果可用）
             status = getattr(self, 'status_var', None)
             if status:
@@ -4677,15 +4682,31 @@ class AnyKeyApp(ctk.CTk):
         self._refresh_app_dropdown()
 
     def _refresh_app_dropdown(self):
-        """从最新 cfg 同步 AppPanel._configured（含主 appAware + 设备级 apps）。
-        让下拉圆点（● 已配置 / ○ 仅运行）随配置变化即时更新。"""
+        """同步 AppPanel 的「已配置」集合 —— 下拉里 ● 实心 / ○ 空心 的唯一依据。
+
+        读 **`_config_master`**，不是 `self.cfg`：编辑期的每一次写入（新建 app 桶、
+        清空后的 `_remove_edit_container`）都只落在 master 上，`self.cfg` 只是当前
+        scope 的「合并视图」，它的 `appAware` / `devices` 段在编辑过程中不更新。
+        读 self.cfg 的后果就是圆点永远停在「○ 仅运行」，要重启 GUI 才变实心。
+
+        `set_configured_apps` 只重建字符串列表、不重新枚举进程，所以可以在保存路径上频繁调用。
+        """
         if not hasattr(self, '_app_panel'):
             return
-        configured = set((self.cfg.get("appAware") or {}).get("apps", {}).keys())
-        for dev_cfg in (self.cfg.get("devices") or {}).values():
-            if isinstance(dev_cfg, dict):
-                configured.update((dev_cfg.get("apps") or {}).keys())
-        self._app_panel.set_configured_apps(list(configured))
+        master = getattr(self, "_config_master", None) or self.cfg
+        configured = set()
+        # 全局应用覆盖：只算「非空」桶（空桶等于没有配置，手工编辑可能留下）
+        for name, ov in ((master.get("appAware") or {}).get("apps") or {}).items():
+            if ov:
+                configured.add(str(name).lower())   # 与下拉里的进程名（小写）同一口径
+        # 设备级应用覆盖：任何一台设备配过，该应用就算「已配置」
+        for dev_cfg in (master.get("devices") or {}).values():
+            if not isinstance(dev_cfg, dict):
+                continue
+            for name, ov in (dev_cfg.get("apps") or {}).items():
+                if ov:
+                    configured.add(str(name).lower())
+        self._app_panel.set_configured_apps(sorted(configured))
         self._app_panel.set_selected(self._current_app)
 
     def _on_delete_page_clicked(self):
@@ -5100,6 +5121,11 @@ class AnyKeyApp(ctk.CTk):
         cfg = self._collect_cfg()
         save_config(cfg)
         # self.cfg 保持合并视图，不替换为 master 深拷贝
+        # app 桶可能刚建立 / 刚被清空 → 同步下拉圆点（● 已配置 / ○ 仅运行）
+        try:
+            self._refresh_app_dropdown()
+        except Exception as e:
+            print("refresh app dropdown error:", e)
         status = getattr(self, 'status_var', None)
         if status:
             status.set("✓ 配置已保存")

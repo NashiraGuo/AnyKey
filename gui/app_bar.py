@@ -104,8 +104,14 @@ class AppPanel:
 
     # ── 公共接口 ──
     def set_configured_apps(self, names: list[str]):
+        """更新「已配置」集合 —— 这就是 ● / ○ 圆点的唯一依据。
+
+        只重建列表、**不重新枚举进程**：这个方法会被每次自动保存调用（编辑期随时在变），
+        而枚举窗口进程要逐 hwnd 取 pid（win32gui + psutil），几十毫秒级，放在按键路径上会卡。
+        需要最新进程列表的路径（点开下拉、浏览文件）自己走 `_refresh_list()`。
+        """
         self._configured = set(names)
-        self._refresh_list()
+        self._rebuild()
 
     def set_selected(self, app: str):
         self._current = app or APP_NONE
@@ -124,7 +130,12 @@ class AppPanel:
 
     # ── 下拉更新 ──
     def _refresh_list(self):
+        """重新枚举进程 + 重建列表（开销较大，只在"可能真的变了"的时机调用）。"""
         self._running_names = _enum_foreground_processes()
+        self._rebuild()
+
+    def _rebuild(self):
+        """按当前 `_configured` / `_running_names` 重建下拉项与选中项（纯字符串，零 IO）。"""
         items = [("全局", APP_NONE)]
         for name in sorted(self._configured):
             items.append((f"● {name}", name))
