@@ -1747,7 +1747,7 @@ class AnyKeyApp(ctk.CTk):
             tids.append(tid)
 
     def _del_combo_row(self, row_data):
-        """删除一行 combo"""
+        """删除一行 combo（覆盖层里＝撤销本层覆盖，下层继承值会重新出现）"""
         for w in row_data["widgets"]:
             if isinstance(w, tk.Widget):
                 try:
@@ -1758,7 +1758,7 @@ class AnyKeyApp(ctk.CTk):
             self._combo_row_widgets.remove(row_data)
         if row_data["vars"] in self._combo_rows:
             self._combo_rows.remove(row_data["vars"])
-        self._schedule_autosave()
+        self._after_entry_deleted()
 
     # ── 收集 combo 表格数据 ────────────────────────
     def _collect_combo_rows(self):
@@ -2728,10 +2728,11 @@ class AnyKeyApp(ctk.CTk):
     def _clear_kb_key(self):
         if not self._selected_kb_key:
             return
+        key = self._selected_kb_key
         idx = self._current_layer_idx
         trees = self._layer_key_trees[idx]
         for r in trees["vars"]:
-            if len(r) >= 1 and r[0].get().strip().lower() == self._selected_kb_key.lower():
+            if len(r) >= 1 and r[0].get().strip().lower() == key.lower():
                 for v in r:
                     v.set("")
                 break
@@ -2741,11 +2742,8 @@ class AnyKeyApp(ctk.CTk):
         self._kb_dt_var = self._kb_dtt_var = self._kb_dh_var = self._kb_dht_var = None
         for e in self._kb_entries:
             self._load_entry(e, None)
-        self._kb_key_label.configure(text="\u2014")
-        self._selected_kb_key = None
-        self._refresh_kb_labels()
-        self._refresh_macro_table()
-        self._schedule_autosave()
+        # 覆盖层里这只是一次「撤销本层覆盖」——重解析后若下层还有该键，面板会重新显示继承值
+        self._after_entry_deleted(keep_layer_idx=idx, keep_kb_key=key)
 
     # ── 输出值格式化 ──
     @staticmethod
@@ -4042,7 +4040,7 @@ class AnyKeyApp(ctk.CTk):
             tids.append(tid)
 
     def _del_sequence_row(self, row_data):
-        """删除一行序列"""
+        """删除一行序列（覆盖层里＝撤销本层覆盖，下层继承值会重新出现）"""
         for w in row_data["widgets"]:
             if isinstance(w, tk.Widget):
                 try:
@@ -4053,7 +4051,7 @@ class AnyKeyApp(ctk.CTk):
             self._seq_row_widgets.remove(row_data)
         if row_data["vars"] in self._seq_rows:
             self._seq_rows.remove(row_data["vars"])
-        self._schedule_autosave()
+        self._after_entry_deleted()
 
     # ── 收集序列表格数据 ────────────────────────
     def _collect_leader_rows(self):
@@ -4441,6 +4439,30 @@ class AnyKeyApp(ctk.CTk):
             a = master.get("appAware", {}).get("apps", {})
             if app in a and not a[app]:
                 del a[app]
+
+    def _after_entry_deleted(self, keep_layer_idx=None, keep_kb_key=None):
+        """删除一条「本层」条目后：先把删除落进 master，再按当前 scope 重解析并重绘。
+
+        为什么必须重绘：覆盖层里的删除只等于**撤销本层覆盖** —— 下层（全局/设备）的同一条目
+        仍然被继承着。只删控件、不重解析，界面就会停在「空值 / 少一行」的状态，看起来像删除
+        成功了，实际切换 scope 又原样回来（而且容易让人误以为已经清掉了全局映射）。
+        全局 scope 没有下层可继承，重绘等价，不会多出东西。
+
+        keep_* 参数供层页使用：删完回到原来那一层、重新选中同一个键，面板直接显示继承来的值。
+        """
+        try:
+            self._flush_active_mapping()
+        except Exception as e:
+            print("flush after delete error:", e)
+        self._reload_view()
+        if keep_kb_key:
+            try:
+                if keep_layer_idx is not None:
+                    self._switch_layer(keep_layer_idx)  # 回到原来那一层（reload 会重置到 base）
+                self._select_kb_key(keep_kb_key)        # 面板显示重新解析后的值
+            except Exception as e:
+                print("reselect after delete error:", e)
+        self._schedule_autosave()
 
     def _select_edit_target(self, guid):
         try:
