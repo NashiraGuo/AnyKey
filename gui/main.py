@@ -275,11 +275,32 @@ class AnyKeyApp(ctk.CTk):
     # ──────────────────────────────────────────────
     # 自动保存：各页面控件变更后立即持久化
     # ──────────────────────────────────────────────
+    def _sync_device_state_to_cfg(self, cfg):
+        """把「设备栏」的权威结果同步回 self.cfg（界面读的那份配置快照）。
+
+        为什么必须有这一步：`_collect_cfg` 只把结果拼进**要落盘的** cfg，从不写回
+        self.cfg；而设备栏重建（`_refresh_devices`）与设备标签（`_short_device_label`）
+        读的都是 self.cfg。于是任何设备栏改动（别名、订阅开关、域）在点一次「刷新」
+        之后都会回滚到启动时的快照 —— 典型表现：删掉别名后一刷新又出现
+        （2026-10-27 实测）。这三个字段不属于「合并视图」语义，可以直接同步。
+        """
+        for k in ("device_registry", "subscribed_devices", "device_aliases"):
+            val = self._dc(cfg[k]) if cfg.get(k) else None
+            for target in (self.cfg, getattr(self, "_config_master", None)):
+                if not isinstance(target, dict):
+                    continue
+                if val is None:
+                    target.pop(k, None)
+                else:
+                    target[k] = self._dc(val)
+
     def _autosave(self, *_):
         """收集当前 UI 状态并立即写入配置文件"""
         try:
             cfg = self._collect_cfg()
             save_config(cfg)
+            # 设备栏（别名 / 订阅 / 域）的权威结果同步回界面快照，否则点「刷新」会回滚
+            self._sync_device_state_to_cfg(cfg)
             # self.cfg 保持为 _flush_active_mapping 写入的合并视图，
             # 不替换为 master 深拷贝（否则后续编辑会错误写入全局层）
             # 保存后覆盖/继承状态可能变化（例如刚改的继承条目变成覆盖），刷新颜色框
@@ -5021,34 +5042,46 @@ class AnyKeyApp(ctk.CTk):
                 return entry
 
             # ── 构建 device_registry（所有行） ──
-            registry = []
-            subscribed = []
-            for (guid, vid, pid, dtype, alias, _on, dev, domain_var, device_ids, online) in _row_data:
-                # 未启用独立设置 → 所有设备都经过全局映射（全部订阅）；
-                # 启用独立设置 → 只订阅各设备开关打开的设备。
-                _enabled = True if not per_dev else _on
-                sub_devs = dev.get("_sub_devices") if isinstance(dev, dict) else None
-                if sub_devs and isinstance(sub_devs, list) and len(sub_devs) > 1:
-                    # 复合设备（同一 ContainerID 下多个 HID 子节点）：
-                    # 为每个子节点写一条独立订阅，各自 hardware_id / type 不同。
-                    for sd in sub_devs:
-                        if sd.get("is_mouse"):
-                            sd_type = "mouse"
-                        elif sd.get("is_keyboard"):
-                            sd_type = "keyboard"
-                        else:
-                            sd_type = "other"
-                        reg = _make_entry(guid, vid, pid, sd_type, alias, sd, domain_var, online=online, enabled=_enabled)
+            # 只有在**真的扫到设备行**时才重建注册表：扫描为空 ≠ 用户删掉了所有设备。
+            # 无条件重建的话，「驱动不可用 / 设备全离线」时任何一次自动保存都会把磁盘上
+            # 已有的订阅与别名整体清空（便携模式下必然踩到，且用户完全无感）。
+            if _row_data:
+                registry = []
+                subscribed = []
+                for (guid, vid, pid, dtype, alias, _on, dev, domain_var, device_ids, online) in _row_data:
+                    # 未启用独立设置 → 所有设备都经过全局映射（全部订阅）；
+                    # 启用独立设置 → 只订阅各设备开关打开的设备。
+                    _enabled = True if not per_dev else _on
+                    sub_devs = dev.get("_sub_devices") if isinstance(dev, dict) else None
+                    if sub_devs and isinstance(sub_devs, list) and len(sub_devs) > 1:
+                        # 复合设备（同一 ContainerID 下多个 HID 子节点）：
+                        # 为每个子节点写一条独立订阅，各自 hardware_id / type 不同。
+                        for sd in sub_devs:
+                            if sd.get("is_mouse"):
+                                sd_type = "mouse"
+                            elif sd.get("is_keyboard"):
+                                sd_type = "keyboard"
+                            else:
+                                sd_type = "other"
+                            reg = _make_entry(guid, vid, pid, sd_type, alias, sd, domain_var, online=online, enabled=_enabled)
+                            registry.append(reg)
+                            if _enabled:
+                                subscribed.append(reg)
+                    else:
+                        reg = _make_entry(guid, vid, pid, dtype, alias, dev, domain_var, online=online, enabled=_enabled)
                         registry.append(reg)
                         if _enabled:
                             subscribed.append(reg)
-                else:
-                    reg = _make_entry(guid, vid, pid, dtype, alias, dev, domain_var, online=online, enabled=_enabled)
-                    registry.append(reg)
-                    if _enabled:
-                        subscribed.append(reg)
-            cfg["device_registry"] = registry
-            cfg["subscribed_devices"] = subscribed
+                cfg["device_registry"] = registry
+                cfg["subscribed_devices"] = subscribed
+            else:
+                # 没扫到设备：沿用当前快照里的注册表（不能留 master 的旧值，否则
+                # 「清空别名 → 扫描为空」时会把旧别名又写回磁盘）
+                for _k in ("device_registry", "subscribed_devices"):
+                    if self.cfg.get(_k):
+                        cfg[_k] = self._dc(self.cfg[_k])
+                    else:
+                        cfg.pop(_k, None)
 
             # 始终回写别名集合
             if aliases:
@@ -5120,6 +5153,8 @@ class AnyKeyApp(ctk.CTk):
     def _save_all(self):
         cfg = self._collect_cfg()
         save_config(cfg)
+        # 设备栏（别名 / 订阅 / 域）的权威结果同步回界面快照，否则点「刷新」会回滚
+        self._sync_device_state_to_cfg(cfg)
         # self.cfg 保持合并视图，不替换为 master 深拷贝
         # app 桶可能刚建立 / 刚被清空 → 同步下拉圆点（● 已配置 / ○ 仅运行）
         try:
