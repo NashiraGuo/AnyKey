@@ -89,6 +89,52 @@ class _SoftArrowComboBox(ctk.CTkComboBox):
                                 fill=self._apply_appearance_mode(_arrow_col))
 
 # ──────────────────────────────────────────────
+# 设备「域」：显示文本 ↔ domain_id 的**唯一**换算点
+#
+# 配置与引擎里 domain_id 恒为数字（0=独立、1=全局、N=共享域 N，见
+# runtime_builder::build_multi_device_contexts），下拉里的「全局 / 域2 / 域3」只是人话标签。
+# 之前这两处各写一份 dict，且读时用 isinstance(int) 硬判、写时解析失败就落 0，于是：
+#   · 配置里若是字符串数字（"3"）→ 显示成「全局」，保存时还会被改写成 1；
+#   · 用户在下拉里敲了「域5」或乱码 → 静默变成「独立」。
+# 两个都是**静默改写用户配置**，所以收敛成下面两个纯函数。
+# ──────────────────────────────────────────────
+_DOMAIN_PRESET = {"独立": 0, "全局": 1, "域2": 2, "域3": 3, "域4": 4}
+
+
+def _domain_to_display(domain_id):
+    """domain_id（数字或数字字符串）→ 下拉显示文本。解析不出按「全局」显示（引擎默认值）。"""
+    try:
+        n = int(domain_id)
+    except (TypeError, ValueError):
+        n = 1
+    for text, val in _DOMAIN_PRESET.items():
+        if val == n:
+            return text
+    return str(n)
+
+
+def _domain_from_input(text, fallback=1):
+    """下拉文本 → domain_id。接受「域5」「域 5」「5」；解析不出则**回落到 fallback**（原值）。
+
+    绝不静默改成 0（独立）—— 那会让一台设备突然从共享域变成自己一份状态，
+    表面看只是"没反应"，实际运行语义已经变了。
+    """
+    s = str(text or "").strip()
+    if s in _DOMAIN_PRESET:
+        return _DOMAIN_PRESET[s]
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if digits:
+        try:
+            return int(digits)
+        except ValueError:
+            pass
+    try:
+        return int(fallback)
+    except (TypeError, ValueError):
+        return 1
+
+
+# ──────────────────────────────────────────────
 # 主窗口
 # ──────────────────────────────────────────────
 class AnyKeyApp(ctk.CTk):
@@ -942,9 +988,7 @@ class AnyKeyApp(ctk.CTk):
             domain_label.grid(row=1, column=2, padx=(0,2), pady=(0,3), sticky="e")
 
             _domain_id = reg_entry.get("domain_id")
-            domain_num = str(_domain_id) if isinstance(_domain_id, int) else "1"
-            _preset_inv = {"0":"独立","1":"全局","2":"域2","3":"域3","4":"域4"}
-            domain_display = _preset_inv.get(domain_num, domain_num)
+            domain_display = _domain_to_display(_domain_id)
             domain_var = ctk.StringVar(value=domain_display)
             domain_var.trace_add("write", lambda *_: self._schedule_autosave())
             domain_combo = _SoftArrowComboBox(row_frame,
@@ -1018,6 +1062,7 @@ class AnyKeyApp(ctk.CTk):
             self._device_rows.append({
                 "frame":row_frame, "switch":sw_var, "sw_widget":sw,
                 "domain":domain_var, "domain_widget":domain_combo,
+                "domain_orig":_domain_id,   # 解析不出输入时的回落值（别静默改成"独立"）
                 "hint":hint, "device":dev,
                 "vid":dvid_s, "pid":dpid_s, "guid":guid,
                 "type":dtype, "alias_var":alias_var, "entry":entry,
@@ -5010,11 +5055,14 @@ class AnyKeyApp(ctk.CTk):
                 enabled_var = row.get("enabled") or row.get("switch")
                 _on = bool(enabled_var.get()) if enabled_var is not None else True
                 domain_var = row.get("domain")
+                domain_orig = row.get("domain_orig", 1)   # 解析不出输入时回落到它
                 device_ids = row.get("device_ids", set())
                 _online = row.get("online", True)
-                _row_data.append((guid, vid, pid, dtype, alias, _on, dev, domain_var, device_ids, _online))
+                _row_data.append((guid, vid, pid, dtype, alias, _on, dev, domain_var,
+                                  domain_orig, device_ids, _online))
 
-            def _make_entry(guid, vid, pid, dtype, alias, dev, domain_var, online=True, enabled=True):
+            def _make_entry(guid, vid, pid, dtype, alias, dev, domain_var,
+                            domain_orig=1, online=True, enabled=True):
                 entry = {"vid": vid, "pid": pid, "type": dtype, "enabled": enabled,
                          "alias": alias, "online": online}
                 if guid:
@@ -5032,13 +5080,9 @@ class AnyKeyApp(ctk.CTk):
                 if domain_var is not None:
                     dom = domain_var.get().strip()
                     if dom:
-                        _preset = {"独立":"0","全局":"1","域2":"2","域3":"3","域4":"4"}
-                        if dom in _preset:
-                            dom = _preset[dom]
-                        try:
-                            entry["domain_id"] = int(dom)
-                        except ValueError:
-                            entry["domain_id"] = 0
+                        # 统一换算点：数字/「域N」都认；解析不出时回落原值，
+                        # 绝不静默改成 0（那等于把设备从共享域改成"独立"）
+                        entry["domain_id"] = _domain_from_input(dom, domain_orig)
                 return entry
 
             # ── 构建 device_registry（所有行） ──
@@ -5048,7 +5092,8 @@ class AnyKeyApp(ctk.CTk):
             if _row_data:
                 registry = []
                 subscribed = []
-                for (guid, vid, pid, dtype, alias, _on, dev, domain_var, device_ids, online) in _row_data:
+                for (guid, vid, pid, dtype, alias, _on, dev, domain_var,
+                     domain_orig, device_ids, online) in _row_data:
                     # 未启用独立设置 → 所有设备都经过全局映射（全部订阅）；
                     # 启用独立设置 → 只订阅各设备开关打开的设备。
                     _enabled = True if not per_dev else _on
@@ -5063,12 +5108,14 @@ class AnyKeyApp(ctk.CTk):
                                 sd_type = "keyboard"
                             else:
                                 sd_type = "other"
-                            reg = _make_entry(guid, vid, pid, sd_type, alias, sd, domain_var, online=online, enabled=_enabled)
+                            reg = _make_entry(guid, vid, pid, sd_type, alias, sd, domain_var,
+                                              domain_orig=domain_orig, online=online, enabled=_enabled)
                             registry.append(reg)
                             if _enabled:
                                 subscribed.append(reg)
                     else:
-                        reg = _make_entry(guid, vid, pid, dtype, alias, dev, domain_var, online=online, enabled=_enabled)
+                        reg = _make_entry(guid, vid, pid, dtype, alias, dev, domain_var,
+                                          domain_orig=domain_orig, online=online, enabled=_enabled)
                         registry.append(reg)
                         if _enabled:
                             subscribed.append(reg)
