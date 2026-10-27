@@ -631,15 +631,15 @@ class AnyKeyApp(ctk.CTk):
         inner = ctk.CTkFrame(self._sidebar, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=8, pady=4)
 
-        # ── 运行模式（输入后端）──
-        # 放在"设备设置"之上：它决定**设备维度能不能用**（便携模式没有设备维度），
+        # ── 便携模式（输入后端）──
+        # 放在"区分设备"之上：它决定**设备维度能不能用**（便携模式没有设备维度），
         # 两个开关的联动关系因此一眼可见。
-        ctk.CTkLabel(inner, text="运行模式", font=("Microsoft YaHei",14,"bold"),
-                     text_color=_THEME["text_mid"]).pack(anchor="w")
+        # 标题本身就是开关名（不再单列一行"运行模式"），开关右对齐挂在标题行上，
+        # 说明行在下方补充语义 —— 三段式：标题 + 开关 + 说明。
         be_row = ctk.CTkFrame(inner, fg_color="transparent")
-        be_row.pack(fill="x", pady=(2,1))
-        self._backend_lbl = ctk.CTkLabel(be_row, text="便携模式", font=("Microsoft YaHei",11),
-                                         text_color=_THEME["text_dark"])
+        be_row.pack(fill="x")
+        self._backend_lbl = ctk.CTkLabel(be_row, text="便携模式", font=("Microsoft YaHei",14,"bold"),
+                                         text_color=_THEME["text_mid"])
         self._backend_lbl.pack(side="left")
         # config 顶层 backend 字段：ON = llhook（免驱动），OFF = driver。缺省 driver。
         self._backend_var = ctk.BooleanVar(
@@ -651,22 +651,26 @@ class AnyKeyApp(ctk.CTk):
         # 说明行：始终有内容，让"这个开关是什么"自解释
         self._backend_hint = ctk.CTkLabel(inner, text="", justify="left", wraplength=180,
             font=("Microsoft YaHei",9), text_color=_THEME["text_light"])
-        self._backend_hint.pack(anchor="w")
+        self._backend_hint.pack(anchor="w", pady=(1,0))
         ctk.CTkFrame(inner, height=1, fg_color=_THEME["border"]).pack(fill="x", pady=(4,4))
 
-        ctk.CTkLabel(inner, text="设备设置", font=("Microsoft YaHei",14,"bold"),
-                     text_color=_THEME["text_mid"]).pack(anchor="w")
-        all_row = ctk.CTkFrame(inner, fg_color="transparent")
-        all_row.pack(fill="x", pady=(2,2))
-        ctk.CTkLabel(all_row, text="设备独立设置", font=("Microsoft YaHei",11),
-                     text_color=_THEME["text_dark"]).pack(side="left")
-        # perDevice 语义 = 「设备独立设置开关」：ON=启用独立设置（只有订阅设备走各自 map，
+        # ── 区分设备（perDevice）──
+        # 与便携模式同一套格式：标题即开关名（不再单列一行"设备独立设置"）。
+        pd_row = ctk.CTkFrame(inner, fg_color="transparent")
+        pd_row.pack(fill="x")
+        self._per_device_lbl = ctk.CTkLabel(pd_row, text="区分设备", font=("Microsoft YaHei",14,"bold"),
+                                            text_color=_THEME["text_mid"])
+        self._per_device_lbl.pack(side="left")
+        # perDevice 语义：ON=启用独立设置（只有订阅设备走各自 map，
         # 未订阅透传）；OFF（默认）=只有全局设置生效，所有设备都经过全局映射。
         self._per_device_var = ctk.BooleanVar(value=self.cfg.get("perDevice", False))
-        self._per_device_sw = ctk.CTkSwitch(all_row, text="", variable=self._per_device_var,
+        self._per_device_sw = ctk.CTkSwitch(pd_row, text="", variable=self._per_device_var,
             command=self._toggle_per_device, width=36, switch_width=32, switch_height=16,
             progress_color=_THEME["green"])
         self._per_device_sw.pack(side="right")
+        self._per_device_hint = ctk.CTkLabel(inner, text="", justify="left", wraplength=180,
+            font=("Microsoft YaHei",9), text_color=_THEME["text_light"])
+        self._per_device_hint.pack(anchor="w", pady=(1,2))
         # Canvas + CapsuleScrollbar
         dev_container = ctk.CTkFrame(inner, fg_color=_THEME["card"],
                                      border_width=1, border_color=_THEME["border"],
@@ -1073,7 +1077,7 @@ class AnyKeyApp(ctk.CTk):
         except Exception:
             pass
         # 驱动可用性可能在 GUI 开着的时候变化（用户刚装完驱动）→ 每次刷新设备时**重探一次**，
-        # 顺带刷新运行模式区。这样"装驱动 → 点刷新 → 开关恢复可用"不需要重启 GUI。
+        # 顺带刷新便携模式区。这样"装驱动 → 点刷新 → 开关恢复可用"不需要重启 GUI。
         if hasattr(self, "_backend_var"):
             self._driver_ok, self._driver_reason = _probe_driver_safe()
             self._apply_backend_ui()
@@ -1084,7 +1088,7 @@ class AnyKeyApp(ctk.CTk):
         两个条件同时成立才可用：
           ① **当前生效后端**不是便携模式。生效后端 = 显式选了 llhook，
              或驱动不可用（引擎在驱动不可用时自己会回退到 llhook，见设计文档 §4.2）；
-          ② 用户打开了「设备独立设置」（OFF 时本来就全部走全局映射，设备行无意义）。
+          ② 用户打开了「区分设备」（OFF 时本来就全部走全局映射，设备行无意义）。
 
         所有置灰/恢复都从这一个函数派生，避免两处判据打架（这是本项目着色类
         bug 的典型来源：同一属性有两个着色入口）。
@@ -1094,42 +1098,72 @@ class AnyKeyApp(ctk.CTk):
         return bool(self._per_device_var.get())
 
     def _apply_backend_ui(self):
-        """按「驱动可用性 × 后端选择」刷新运行模式区与设备栏。
+        """按「驱动可用性 × 后端选择」刷新便携模式区与设备栏。
 
         规则（设计文档 §16）：
           - **驱动不可用**：后端开关禁用 + 给出具体原因；此时**不改写存储值** ——
             用户并没有做出选择，而引擎自己会回退到便携模式，存储的"意图"要留到驱动恢复。
-          - **便携模式生效**（显式选 llhook，或驱动不可用）：「设备独立设置」开关禁用、
+          - **便携模式生效**（显式选 llhook，或驱动不可用）：「区分设备」开关禁用、
             设备行置灰。**灰 ≠ 清空** —— 只禁交互，配置里的 perDevice 与每设备设置原样保留。
         """
         llhook = bool(self._backend_var.get())
         effective_llhook = llhook or (not self._driver_ok)
 
         # ── 后端开关本身 ──
+        # 标题与下方「区分设备」同级标题同色（text_mid），禁用时才灰掉 ——
+        # 标题颜色不随开关状态在深/中灰之间跳。
         if self._driver_ok:
             self._backend_sw.configure(state="normal", progress_color=_THEME["green"])
-            self._backend_lbl.configure(text_color=_THEME["text_dark"])
+            self._backend_lbl.configure(text_color=_THEME["text_mid"])
         else:
             self._backend_sw.configure(
                 state="disabled",
                 progress_color=_THEME["green"] if llhook else _THEME["text_disabled"])
             self._backend_lbl.configure(text_color=_THEME["text_disabled"])
 
-        # ── 说明行 ──
+        # ── 说明行（标题已写明"便携模式"，正文不再重复这四个字；
+        #     "区分设备"的影响由它自己那一行说明，这里不越界）──
         if not self._driver_ok:
-            hint = ("驱动不可用（%s）\n引擎会自动按便携模式运行；此处设置保留，驱动恢复后自动生效"
+            hint = ("驱动不可用（%s）\n自动按便携模式运行，此设置暂不生效"
                     % _DRIVER_REASON_TEXT.get(self._driver_reason, "原因未知"))
         elif llhook:
-            hint = "便携模式：免驱动运行，不支持按设备独立设置"
+            hint = "免驱动运行"
         else:
-            hint = "驱动模式：全功能（含按设备独立设置）"
+            hint = "驱动模式，全部功能可用"
         self._backend_hint.configure(text=hint)
 
-        # ── 设备栏联动 ──
+        # ── 区分设备（perDevice）+ 设备栏联动 ──
         if getattr(self, "_per_device_sw", None) is not None:
-            self._per_device_sw.configure(state="disabled" if effective_llhook else "normal")
+            if effective_llhook:
+                self._per_device_sw.configure(
+                    state="disabled",
+                    progress_color=(_THEME["green"] if self._per_device_var.get()
+                                    else _THEME["text_disabled"]))
+                if getattr(self, "_per_device_lbl", None) is not None:
+                    self._per_device_lbl.configure(text_color=_THEME["text_disabled"])
+            else:
+                self._per_device_sw.configure(state="normal", progress_color=_THEME["green"])
+                if getattr(self, "_per_device_lbl", None) is not None:
+                    self._per_device_lbl.configure(text_color=_THEME["text_mid"])
+            self._apply_per_device_hint()
         if hasattr(self, "_device_rows"):
             self._restyle_device_rows(self._device_ui_enabled())
+
+    def _apply_per_device_hint(self):
+        """「区分设备」说明行：只讲这个开关的含义 / 为什么点不了。
+
+        便携模式生效时开关是灰的，说明行必须回答"为什么"，否则用户只会看到
+        一个点不动的开关（原因细节在上方便携模式那一行，不重复）。
+        """
+        if getattr(self, "_per_device_hint", None) is None:
+            return
+        if self._backend_var.get() or not self._driver_ok:
+            txt = "便携模式不支持区分设备"
+        elif self._per_device_var.get():
+            txt = "每台设备可有独立映射"
+        else:
+            txt = "所有设备共用全局设置"
+        self._per_device_hint.configure(text=txt)
 
     def _toggle_backend(self):
         """切换输入后端（驱动 ↔ 便携）。
@@ -1141,7 +1175,8 @@ class AnyKeyApp(ctk.CTk):
         self._schedule_autosave()
 
     def _toggle_per_device(self):
-        """「设备独立设置」开关：只负责重画 + 落盘，判据统一在 `_device_ui_enabled()`。"""
+        """「区分设备」开关：只负责重画 + 落盘，判据统一在 `_device_ui_enabled()`。"""
+        self._apply_per_device_hint()
         self._restyle_device_rows(self._device_ui_enabled())
         self._schedule_autosave()
 
@@ -4284,7 +4319,11 @@ class AnyKeyApp(ctk.CTk):
 
     def _flush_active_mapping(self):
         try:
-            master = getattr(self, "_config_master", None) or self.cfg
+            master = getattr(self, "_config_master", None)
+            if not master:
+                # 空配置（首次启动、磁盘上还没有 config）时不能把 self.cfg 当权威：
+                # self.cfg 是「当前 scope 的合并视图」，就地写它会让后续 flush 越写越偏。
+                master = self._config_master = self._dc(self.cfg)
             tgt = getattr(self, "_edit_target", None)
             app = getattr(self, "_current_app", "")
 
@@ -4352,10 +4391,15 @@ class AnyKeyApp(ctk.CTk):
                 if d_leader:
                     bucket["leader"] = d_leader
                 devices = master.setdefault("devices", {})
-                if bucket:
-                    # 合并而非替换，保留已有的 apps 等子桶
-                    existing = dict(devices.get(tgt) or {})
-                    existing.update(bucket)
+                # 只覆盖/清除本层自己的映射段，绝不整体删设备桶：
+                # 桶里可能还挂着 apps 子桶（设备+应用独立设置），整体 pop 会连它们一起抹掉。
+                # 典型复现：只在「设备+应用」下设一条映射 → 切到全局应用（本层 diff 为空）
+                # → 再切回该应用，内容已被清空。
+                existing = dict(devices.get(tgt) or {})
+                for _k in ("comboMap", "tapDance", "leader"):
+                    existing.pop(_k, None)
+                existing.update(bucket)
+                if existing:
                     devices[tgt] = existing
                 else:
                     devices.pop(tgt, None)
@@ -4385,7 +4429,14 @@ class AnyKeyApp(ctk.CTk):
             if not dd:
                 master.setdefault("devices", {}).pop(device, None)
         elif device:
-            master.setdefault("devices", {}).pop(device, None)
+            # 同上：只清设备层自己的映射段，保留 apps 子桶（设备+应用独立设置）
+            devices = master.setdefault("devices", {})
+            dd = devices.get(device)
+            if isinstance(dd, dict):
+                for _k in ("comboMap", "tapDance", "leader"):
+                    dd.pop(_k, None)
+                if not dd:
+                    devices.pop(device, None)
         elif app:
             a = master.get("appAware", {}).get("apps", {})
             if app in a and not a[app]:
@@ -5017,7 +5068,7 @@ class AnyKeyApp(ctk.CTk):
 
         # 记忆当前编辑目标（全局/某设备），重启时恢复
         cfg["lastEditTarget"] = self._edit_target
-        # 记忆"设备独立设置"开关状态（perDevice：true=启用独立设置）
+        # 记忆「区分设备」开关状态（perDevice：true=启用独立设置）
         cfg["perDevice"] = self._per_device_var.get()
 
         return cfg
