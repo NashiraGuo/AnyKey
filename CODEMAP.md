@@ -103,7 +103,7 @@ AnyKey/
 | `emit.rs` | 底层输出原语：`key_name_to_scancode`（SendInput 回退表）/ `mouse_name_to_flags`（键名→FLT 按钮标志）/ `is_mouse_key_name`；鼠标键名已统一为驱动规范名（`mouseleft`/`mouseright`/`mousemiddle`/`mouseside1`/`mouseside2`），旧别名已删除 |
 | `registry.rs` | 设备枚举（与 FilterDriver 共享）；`DeviceDescriptor` 列表 |
 | `matcher.rs` | 设备匹配规则（GUID+VID+PID+HWID）；热插拔重匹配 |
-| `runtime_builder.rs` | Mapping 构建 + **RuntimeManager v3**（`domains: HashMap<u32, DeviceState>` + `mappings: HashMap<(u32,String), Arc<DeviceMapping>>`）；`merge_combos` / `merge_layers` / `merge_leader` 合并；`build_combo_index`（combo 键名经 `norm_key` 规范化）；`apply_app_override`（四层覆盖链）；测试已分离至 `tests/runtime_builder_test.rs` |
+| `runtime_builder.rs` | Mapping 构建 + **RuntimeManager v3**（`domains: HashMap<u32, DeviceState>` + `mappings: HashMap<(u32,String), Arc<DeviceMapping>>`）；`merge_combos` / `merge_layers` / `merge_leader` 合并；`build_mapping`（唯一构建入口，覆盖层的 `{unmap}` 在这里被解释掉）；`build_combo_index`（combo 键名经 `norm_key` 规范化）；`apply_app_override`（四层覆盖链）；测试已分离至 `tests/runtime_builder_test.rs` |
 | `app_sensor.rs` | SetWinEventHook 窗口类名侦测 + mpsc channel |
 | `util.rs` | `wrap_single_key_output`、扫描码表、`is_layer_key`、`needs_e0` 等工具 |
 | `filter_driver.rs` | `#[cfg(feature="filter-driver")]`：与内核驱动通讯（WAIT_INPUT / SET_INTERCEPT / 鼠标注入） |

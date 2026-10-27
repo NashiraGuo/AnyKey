@@ -50,7 +50,7 @@ The release package ships both — **whether to install the driver is your call*
 | Emergency escape hotkey (LCtrl+Space+Esc) | ✅ kernel-level | ✅ hook-level (see below) |
 | Input latency | lower | one extra user-mode round trip per key |
 
-**How to choose**: the "Run mode" switch in the GUI's left column. **If the driver is unavailable, the switch is greyed out and states the reason** (not installed / installed but not loaded / test signing off), and the engine simply runs in portable mode. The choice is stored in the top-level `backend` field of the config (`driver` / `llhook`) and **takes effect after the engine restarts** (tray "Reload settings", or "Full exit" and start again). To force it, pass `--backend=llhook` on the engine command line.
+**How to choose**: the "Portable mode" switch in the GUI's left column. **If the driver is unavailable, the switch is greyed out and states the reason** (not installed / installed but not loaded / test signing off), and the engine simply runs in portable mode. The choice is stored in the top-level `backend` field of the config (`driver` / `llhook`) and **takes effect after the engine restarts** (tray "Reload settings", or "Full exit" and start again). To force it, pass `--backend=llhook` on the engine command line.
 
 **Two costs of portable mode**, worth knowing up front:
 
@@ -528,6 +528,7 @@ python -m gui.main             # launch the configurator
 - Design rationale: [`docs/DESIGN.md`](docs/DESIGN.md) — motivation and key decisions behind each core feature
 - Code map: root-level [`CODEMAP.md`](CODEMAP.md) + [`docs/code_map_arch.svg`](docs/code_map_arch.svg) — module breakdown and data flow (a structure index for code readers)
 - Driver-free backend: [`docs/design_portable_nodriver_backend.md`](docs/design_portable_nodriver_backend.md) — the full design of portable mode (including rejected approaches and empirical findings, so nobody re-walks that path)
+- Override-level deletion: [`docs/design_unmap_override.md`](docs/design_unmap_override.md) — the `{unmap}` marker: how app/device overrides remove inherited entries (including the "entry is gone" rule and rejected alternatives)
 
 ---
 
