@@ -60,6 +60,7 @@ class AppPanel:
         self._combo_display: list[str] = []
         self._combo_values: list[str] = []
         self._current = APP_NONE
+        self._processes_loaded = False   # 进程列表是否已读过（首次必须读一次，见 _ensure_running_names）
 
         # 回调（main.py 注入）
         self.on_app_change = None
@@ -99,19 +100,39 @@ class AppPanel:
             height=28,
             command=self._on_select)
         self._app_combo.pack(fill="x")
-        # 点击下拉 → 先刷新进程列表
-        self._app_combo.bind("<Button-1>", self._pre_refresh)
+        # 点箭头展开下拉 → 先刷新进程列表（未运行的应用已关、新开的应用要出现）。
+        # **必须绑在 canvas 的箭头/右侧区域上**：CTkComboBox 的展开是
+        # `canvas.tag_bind("dropdown_arrow", "<Button-1>", self._clicked)`，
+        # 绑在 frame（self._app_combo.bind(...)）上的 <Button-1> 永远不会触发 ——
+        # 点击落在子控件（entry / canvas item）上，Tk 不会把事件冒泡给父 frame。
+        # add="+" 保留 CTk 自己的展开回调，只在我们之后/之前插一段刷新。
+        self._bind_pre_refresh()
+
+    def _bind_pre_refresh(self):
+        for tag in ("dropdown_arrow", "right_parts"):
+            try:
+                self._app_combo._canvas.tag_bind(tag, "<Button-1>", self._pre_refresh, add="+")
+            except Exception:
+                pass
 
     # ── 公共接口 ──
     def set_configured_apps(self, names: list[str]):
         """更新「已配置」集合 —— 这就是 ● / ○ 圆点的唯一依据。
 
-        只重建列表、**不重新枚举进程**：这个方法会被每次自动保存调用（编辑期随时在变），
+        只重建列表、**不每次重新枚举进程**：这个方法会被每次自动保存调用（编辑期随时在变），
         而枚举窗口进程要逐 hwnd 取 pid（win32gui + psutil），几十毫秒级，放在按键路径上会卡。
-        需要最新进程列表的路径（点开下拉、浏览文件）自己走 `_refresh_list()`。
+        但**首次必须读一次**（`_ensure_running_names`）—— 否则下拉里只有「全局」，
+        运行中的应用一个都看不到，要等用户点开下拉才出现（2026-10-27 实测的启动回归）。
         """
         self._configured = set(names)
+        self._ensure_running_names()
         self._rebuild()
+
+    def _ensure_running_names(self):
+        """进程列表惰性加载：只读一次，之后靠 refresh() / 点开下拉更新。"""
+        if not self._processes_loaded:
+            self._running_names = _enum_foreground_processes()
+            self._processes_loaded = True
 
     def set_selected(self, app: str):
         self._current = app or APP_NONE
@@ -132,6 +153,7 @@ class AppPanel:
     def _refresh_list(self):
         """重新枚举进程 + 重建列表（开销较大，只在"可能真的变了"的时机调用）。"""
         self._running_names = _enum_foreground_processes()
+        self._processes_loaded = True
         self._rebuild()
 
     def _rebuild(self):
