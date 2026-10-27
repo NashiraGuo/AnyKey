@@ -100,20 +100,37 @@ class AppPanel:
             height=28,
             command=self._on_select)
         self._app_combo.pack(fill="x")
-        # 点箭头展开下拉 → 先刷新进程列表（未运行的应用已关、新开的应用要出现）。
-        # **必须绑在 canvas 的箭头/右侧区域上**：CTkComboBox 的展开是
-        # `canvas.tag_bind("dropdown_arrow", "<Button-1>", self._clicked)`，
-        # 绑在 frame（self._app_combo.bind(...)）上的 <Button-1> 永远不会触发 ——
-        # 点击落在子控件（entry / canvas item）上，Tk 不会把事件冒泡给父 frame。
-        # add="+" 保留 CTk 自己的展开回调，只在我们之后/之前插一段刷新。
+        # 点箭头展开下拉 → **先**刷新进程列表、**再**让 CTk 展开。
+        #
+        # 两个坑都在这里：
+        #  ① CTkComboBox 的展开走 `canvas.tag_bind("dropdown_arrow"/"right_parts",
+        #     "<Button-1>", self._clicked)`，绑在 frame（self._app_combo.bind(...)）
+        #     上的 <Button-1> 永远不会触发 —— 点击落在 entry / canvas item 这些子控件上，
+        #     Tk 不把事件冒泡给父 frame；
+        #  ② 顺序必须是「刷新 → 展开」。若用 add="+" 追加在 CTk 的 _clicked 之后，
+        #     刷新会发生在**菜单已经建好之后**：configure(values=…) 改掉选项，
+        #     菜单按钮上的旧显示串再也匹配不到 _combo_display → 点条目毫无反应
+        #     （2026-10-27 实测的"点应用名没反应"）。
+        # 所以这里**替换**掉 CTk 的绑定，自己先刷新再转调 _clicked。
         self._bind_pre_refresh()
 
     def _bind_pre_refresh(self):
         for tag in ("dropdown_arrow", "right_parts"):
             try:
-                self._app_combo._canvas.tag_bind(tag, "<Button-1>", self._pre_refresh, add="+")
+                self._app_combo._canvas.tag_bind(tag, "<Button-1>", self._on_arrow_click)
             except Exception:
                 pass
+
+    def _on_arrow_click(self, event=None):
+        """展开下拉前刷新进程列表；随后交给 CTk 自己的 _clicked 打开菜单。"""
+        try:
+            self._refresh_list()          # 此刻菜单还没建，改 values 是安全的
+        except Exception as e:
+            print("refresh app list error:", e)
+        try:
+            self._app_combo._clicked(event)   # CTk 的展开逻辑（含 close_on_next_click）
+        except Exception as e:
+            print("open app dropdown error:", e)
 
     # ── 公共接口 ──
     def set_configured_apps(self, names: list[str]):
@@ -144,9 +161,8 @@ class AppPanel:
         self._refresh_list()
 
     def _pre_refresh(self, _evt=None):
-        """点击下拉时刷新进程列表（保持当前选中）。"""
+        """（保留）只刷新进程列表，不碰选中项。"""
         self._refresh_list()
-        # 刷新后仍交给 ttk 展开下拉列表
         return None
 
     # ── 下拉更新 ──
@@ -176,10 +192,21 @@ class AppPanel:
             self._app_combo.set(self._combo_display[0])
 
     def _on_select(self, display: str):
-        """CTkComboBox command 回调：传入选中的 display 字符串。"""
+        """CTkComboBox command 回调：传入选中的 display 字符串。
+
+        容错：菜单建好之后列表若被动过（刷新、圆点翻转导致 ○→● 前缀变化），
+        拿不到完全相同的显示串也不能"点了没反应" —— 退一步按进程名匹配。
+        """
+        idx = None
         try:
             idx = self._combo_display.index(display)
         except ValueError:
+            name = str(display or "").lstrip("●○").strip()
+            try:
+                idx = self._combo_values.index(name)
+            except ValueError:
+                idx = None
+        if idx is None:
             return
         self._current = self._combo_values[idx]
         if self.on_app_change:
