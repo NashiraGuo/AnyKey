@@ -601,6 +601,23 @@ fn main() {
                         log!("  ERROR: mouse name '{}' not recognized — pipeline should have filtered it", name);
                     }
                 }
+                // ── 纯执行：经 SendInput 发键盘边沿。down/up 由调用方按事件语义直接给 ──
+                fn send_si(kn: &str, down: bool, up: bool) {
+                    let kn = kn.trim_matches(|c: char| c == '{' || c == '}' || c.is_whitespace()).to_lowercase();
+                    let Some(sc) = key_name_to_scancode(&kn) else {
+                        log!("  ERROR: unknown key SI '{}' (no scancode)", kn);
+                        return;
+                    };
+                    let ext = needs_e0(&kn);
+                    let label = if up { if down { "TAP" } else { "UP" } } else { "DN" };
+                    log!("  {} send(ForceSI): {} {} (sc=0x{:02X})", ts_tag(), label, kn, sc);
+                    if down && send_key_down_sendinput(sc, ext) == 0 {
+                        log!("  {} WARNING: SendInput DN '{}' blocked/failed (returned 0, UIPI or security software)", ts_tag(), kn);
+                    }
+                    if up && send_key_up_sendinput(sc, ext) == 0 {
+                        log!("  {} WARNING: SendInput UP '{}' blocked/failed (returned 0, UIPI or security software)", ts_tag(), kn);
+                    }
+                }
                 match event {
                     // ── 键盘键：pipeline 已判断，此处纯执行 ──
                     EmitEvent::Down(ref kn, ev_dev) | EmitEvent::Tap(ref kn, ev_dev) | EmitEvent::Up(ref kn, ev_dev) => {
@@ -619,29 +636,10 @@ fn main() {
                     EmitEvent::MouseUp(ref name, ev_dev) => {
                         send_mouse_event(backend, name, mouse_target_dev(registry, ev_dev, recent_mouse_dev), false);
                     }
-                    // ── SI 变体（由 leader 发出）：扫描码→SendInput，无扫描码→Unicode ──
-                    EmitEvent::TapSI(ref kn, _) | EmitEvent::DownSI(ref kn, _) | EmitEvent::UpSI(ref kn, _) => {
-                        let is_tap = matches!(event, EmitEvent::TapSI(_, _));
-                        let is_down = matches!(event, EmitEvent::DownSI(_, _)) || is_tap;
-                        let kn_clean = kn.trim_matches(|c: char| c=='{'||c=='}'||c.is_whitespace());
-                        let kn_lower = kn_clean.to_lowercase();
-                        if let Some(sc) = key_name_to_scancode(&kn_lower) {
-                            let ext = needs_e0(&kn_lower);
-                            log!("  {} send(ForceSI): {} {} (sc=0x{:02X})", ts_tag(), if is_tap{"TAP"}else if is_down{"DN"}else{"UP"}, kn_lower, sc);
-                            let sent = send_key_down_sendinput(sc, ext);
-                            if sent == 0 {
-                                log!("  {} WARNING: SendInput DN '{}' blocked/failed (returned 0, UIPI or security software)", ts_tag(), kn_lower);
-                            }
-                            if is_tap {
-                                let sent_up = send_key_up_sendinput(sc, ext);
-                                if sent_up == 0 {
-                                    log!("  {} WARNING: SendInput UP '{}' blocked/failed (returned 0, UIPI or security software)", ts_tag(), kn_lower);
-                                }
-                            }
-                        } else {
-                            log!("  ERROR: unknown key SI '{}' (no scancode)", kn_lower);
-                        }
-                    }
+                    // ── SI 变体：SendInput 扫描码注入（leader 合成键 / {key down} / {key up}） ──
+                    EmitEvent::DownSI(ref kn, _) => send_si(kn, true, false),
+                    EmitEvent::UpSI(ref kn, _) => send_si(kn, false, true),
+                    EmitEvent::TapSI(ref kn, _) => send_si(kn, true, true),
                     EmitEvent::Text(ref t, _) => {
                         log!("  {} text: '{}'", ts_tag(), t);
                         send_unicode_text(t);

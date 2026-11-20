@@ -8,14 +8,19 @@ impl PipelineState {
     /// flush_tapdone_as_tap: 把处于 TapDone 的键作为一次「完整 tap」补发（down + up）。
     /// TapDone 的物理键在第一次 keyup 时就已抬起，后续不会再有 keyup 事件，
     /// 所以任何「立即结算 TapDone」的路径都必须自己补发 Up，否则逻辑键卡在按下态（漏 UP）。
-    /// 统一封装 `re_enter(Tap)` + `reenter_up`，供 dt_timer（定时器到期）、
-    /// td_interrupt_all（被第三键打断）、phase_up2_flush（延迟键释放时源头键已 TapDone）
-    /// 三条路径共用，避免各处手写时漏掉 reenter_up。
+    /// 统一封装 `reenter_up` + force-hold 出栈，供 dt_timer（定时器到期）、
+    /// td_interrupt_all（被第三键打断）两条路径共用，避免各处手写时漏掉 reenter_up / 出栈。
     fn flush_tapdone_as_tap(&mut self, key: &str) {
-        // 去掉 re_enter：tap 的解析+发送统一交给 reenter_up（内部经 up4 解析 + up5 发送 + up6 清理），
-        // 与真实 keyup 完全等价，避免重复路径。
+        // 去掉 re_enter：tap 的解析+发送统一交给 reenter_up（内部经 up4 ForceHold +
+        // up5 commit 解析/发送 + up6 清理），与真实 keyup 等价，避免重复路径。
         let mut ctx = Context::new(key);
         ctx.flags = REENTER_UP_SKIP;
+        // REENTER_UP_SKIP 跳过 up3（tap_dance_up），本键的 TapDone 分支不会运行，
+        // 故在此登记触发键，交 up4 → force_hold_execute 激活其前的 waiting 层键并出栈，
+        // 与真实 keyup 的 tap 结算路径（tap_dance_up 内登记 force_hold_up）对称。
+        // 少了这一步，switch 键会以 TapDone 状态永久留在 waiting_stack，
+        // 后续在当前层无 TD 定义的键（如鼠标右键）都会被错误延迟。
+        ctx.force_hold_up = Some(key.to_string());
         self.reenter_up(&mut ctx, REENTER_UP_SKIP);
     }
 
@@ -158,8 +163,9 @@ impl PipelineState {
             // 有待激活层键时抬起，tap 会在未激活层解析 → 某 BUG 根源）。统一改为「登记触发键」交
             // phase_up4_forcehold：up4 经 force_hold_execute 查询(before-self)+激活+移除自己。
             // 注意 force_hold_up 只在「无 dt/dh」的立即 tap 路径内登记：dt/dh 路径走 TapDone 由 dt_timer
-            // 到期经 reenter_up 重新进入，届时由 TapDone/DoubleWait 分支自身登记 force_hold_up，
-            // 避免本 keyup 周期提前激活层（键提前出栈导致后续 double-tap 解析错位）。
+            // 到期经 reenter_up 重新进入；REENTER_UP_SKIP 跳过 up3，故由 flush_tapdone_as_tap
+            // 自己在重入前登记 force_hold_up，交 up4 统一出栈——既避免本 keyup 周期提前激活层
+            // （键提前出栈导致后续 double-tap 解析错位），也保证定时器结算后不留下栈残留。
             Some(TdKind::Waiting) | None => {
                 // [C-lookup] keyup 抬起先打断其它 waiting 键时，不再跳过 P6（keydown forcehold）：
                 // 被 flush 的 waiting 键经 FLUSH_DEFERRED_REENTER 保留 P6，使其 tap 在正确的已激活层上下文解析。
